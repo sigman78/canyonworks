@@ -36,7 +36,11 @@ class App {
   private passOverlay: THREE.Object3D | null = null;
 
   private readonly detailTex: DetailTextures = loadDetailTextures();
-  private readonly detailU: DetailUniforms = { scale: { value: 0.22 }, amount: { value: 0.75 } };
+  private readonly detailU: DetailUniforms = {
+    scale: { value: 0.22 },
+    amount: { value: 0.75 },
+    plateauY: { value: 3.2 },
+  };
 
   private layout!: LayoutResult;
   private fields!: Fields;
@@ -59,7 +63,11 @@ class App {
     });
     this.detailU.scale.value = this.render.texScale;
     this.detailU.amount.value = this.render.texAmount;
-    applyTriplanarDetail(this.terrainMaterial, this.detailTex.cliff, this.detailTex.sand, this.detailU);
+    applyTriplanarDetail(this.terrainMaterial, this.detailTex.cliff, this.detailTex.sand, this.detailU, {
+      dunes: this.detailTex.dunes,
+      gravel: this.detailTex.gravel,
+      mesa: this.detailTex.mesa,
+    });
 
     this.editor = new BrushEditor(this.grid, this.viewer, {
       onQuickUpdate: () => this.quickUpdate(),
@@ -103,6 +111,9 @@ class App {
       this.grid = new HexGrid(this.params.cols, this.params.rows, this.params.hexSize);
     }
     const edits = this.editor.rebind(this.grid);
+
+    // plateau tops blend to the mesa detail layer above this height
+    this.detailU.plateauY.value = this.params.wallHeight * 0.6;
 
     this.noise = makeNoise(this.params.seed);
     this.layout = generateLayout(this.grid, this.params, this.noise, edits);

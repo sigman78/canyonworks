@@ -81,6 +81,14 @@
 - [x] Mostly-luminance detail keeps the vertex palette authoritative
 - [x] View sliders: texture amt / texture scale (live uniforms)
 
+## Done (v0.8 — layered floor & mesa detail)
+
+- [x] dunes / gravel / mesa textures (nano-banana2)
+- [x] Multi-layer top projection: sand + dune patches + gravel patches
+      (world-space value-noise masks, patch = a few hexes)
+- [x] Plateau tops blend to cracked slickrock with rock pools above
+      wallHeight*0.6
+
 ## Next
 
 - [ ] Normal/roughness variation from the detail textures (deeper shader

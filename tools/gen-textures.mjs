@@ -36,6 +36,24 @@ const TEXTURES = {
     'Rough weathered red-brown rock surface, granular pitted stone with ' +
     'small chips and fractures, uniform overall tone. ' +
     COMMON,
+  dunes:
+    'Fine wind-rippled desert sand seen from directly above, dense small ' +
+    'parallel ripple crests like miniature dunes, warm rust-orange sand, ' +
+    'soft painted form shading along the ripple crests only (no cast ' +
+    'shadows). ' +
+    COMMON,
+  gravel:
+    'Rocky desert pavement: scattered small angular stones and pebbles of ' +
+    'varied size half-embedded in rust-orange dust, patchy density, some ' +
+    'bare dust areas between stone clusters. ' +
+    COMMON,
+  mesa:
+    'Weathered sandstone slickrock plateau surface seen from directly ' +
+    'above, network of dried mud-crack style fracture lines dividing the ' +
+    'pale rust-tan stone into irregular plates, a few shallow rounded ' +
+    'potholes and small dark rock pools with sediment, subtle painted ' +
+    'depth in the cracks (no cast shadows). ' +
+    COMMON,
 };
 
 async function generate(name, prompt) {

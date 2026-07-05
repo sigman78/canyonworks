@@ -1,5 +1,28 @@
 # Worklog
 
+## 2026-07-05 — v0.8: layered floor & mesa detail
+
+Feedback: floors need more variation (sandy patches / rocky patches / mini
+dunes); exposed canyon tops too barren — wanted cracks / rock pools.
+
+- Three more nano-banana2 textures: dunes.jpg (painted ripple crests),
+  gravel.jpg (rocky desert pavement), mesa.jpg (cracked slickrock plates
+  with dark potholes / rock pools — the Sedona tinaja look).
+- Top projection is now multi-layer (terrain material only, decor keeps
+  the single rock detail):
+  - base sand -> dune-ripple patches -> gravel patches, masked by
+    2-octave value noise in **world space** (patch size a few hexes,
+    independent of the texture-scale slider; thresholds tuned to ~30% /
+    ~20% coverage)
+  - above `wallHeight * 0.6` (uPlateauY uniform, updated on regen) the
+    layer blends to the mesa texture -> plateau tops get crack networks
+    and pools instead of bare cap color
+- Hue bleed nudged 0.25 -> 0.3 so gravel stones read slightly rockier.
+- Each layer still goes through the dual-sample anti-tiling from v0.7.
+
+Screenshots: `docs/shots/v0.8-floor-layers.jpg`,
+`docs/shots/v0.8-floor-layers-close.jpg`.
+
 ## 2026-07-05 — v0.7: rendering pass — GenAI textures + tri-planar detail shader
 
 Feedback: work on rendering quality — find/generate proper textures, play

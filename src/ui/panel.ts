@@ -96,6 +96,14 @@ export function buildPanel(
     .add(render, 'flatShading')
     .name('flat shading')
     .onChange(() => cb.onRenderOptionChanged());
+  fView
+    .add(render, 'texAmount', 0, 1, 0.05)
+    .name('texture amt')
+    .onChange(() => cb.onRenderOptionChanged());
+  fView
+    .add(render, 'texScale', 0.05, 0.8, 0.01)
+    .name('texture scale')
+    .onChange(() => cb.onRenderOptionChanged());
 
   const actions = {
     regenerate: () => cb.regenerate(),

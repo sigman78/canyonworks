@@ -67,6 +67,10 @@ export interface RenderOptions {
   showPassability: boolean;
   flatShading: boolean;
   showDecor: boolean;
+  /** tri-planar detail texture strength (0 = vertex colors only) */
+  texAmount: number;
+  /** detail texture world-space frequency */
+  texScale: number;
 }
 
 export type EditMode = 'view' | 'carve' | 'wall';
@@ -135,5 +139,7 @@ export function defaultRenderOptions(): RenderOptions {
     showPassability: false,
     flatShading: true,
     showDecor: true,
+    texAmount: 0.75,
+    texScale: 0.22,
   };
 }

@@ -70,7 +70,21 @@
       feedback (too large for now) — raise crackLenMax/crackDepth to get
       them back when fly-only zones become a feature
 
+## Done (v0.7 — rendering pass)
+
+- [x] nano-banana2 texture generator (`tools/gen-textures.mjs` ->
+      `public/textures/`): cliff strata / floor sand / rock detail
+- [x] Tri-planar detail shader (onBeforeCompile on MeshStandardMaterial):
+      cliff on steep, sand on flat, rock on decor; instancing-aware
+- [x] Anti-repetition: dual-sample layering (rotated/rescaled second tap
+      blended by texture-derived variation field) + macro tonal patches
+- [x] Mostly-luminance detail keeps the vertex palette authoritative
+- [x] View sliders: texture amt / texture scale (live uniforms)
+
 ## Next
+
+- [ ] Normal/roughness variation from the detail textures (deeper shader
+      play — current pass is albedo detail only)
 
 - [ ] Decor edit brushes: place/erase boulders & pillars by hand; persist
       decor edits across regen (currently decor re-scatters every regen)
@@ -81,9 +95,6 @@
       their grid silently — could highlight them instead)
 - [ ] Undo for parameter changes (currently only brush strokes)
 - [ ] Move generation into a Web Worker if maps get bigger (>48 hexes)
-- [ ] Texture/materials pass: tri-planar detail texture or hand-painted
-      gradient ramp (candidate: nano-banana2 genAI textures — user can
-      provide API key)
 - [ ] Optional 60°-step camera rotation (hex-friendly)
 - [ ] Hover hex highlight in edit mode (currently only brush ring gizmo)
 - [ ] Screes should optionally mark hexes blocked when dense

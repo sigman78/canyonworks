@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { HexGrid } from '../core/hex';
 import { mulberry32, randRange, type Rng } from '../core/rng';
 import { fbm3, smoothstep, type NoiseKit } from '../core/noise';
+import { applyTriplanarDetail, type DetailUniforms } from '../viewer/terrainMaterial';
 import type { Fields } from './fields';
 import type { GenParams } from './params';
 
@@ -12,6 +13,12 @@ export interface DecorResult {
   counts: { boulders: number; pillars: number; scree: number };
 }
 
+/** optional tri-planar detail texturing for all rock materials */
+export interface DecorDetail {
+  rock: THREE.Texture;
+  uniforms: DetailUniforms;
+}
+
 const ROCK_TONES = [0xa8542c, 0x96482a, 0xb56336, 0x8a4224, 0xc07444];
 
 export function buildDecor(
@@ -19,6 +26,7 @@ export function buildDecor(
   fields: Fields,
   params: GenParams,
   noise: NoiseKit,
+  detail?: DecorDetail,
 ): DecorResult {
   const rng = mulberry32(params.seed ^ 0x51ab7e2d);
   const group = new THREE.Group();
@@ -28,6 +36,16 @@ export function buildDecor(
   const boulders = scatterBoulders(grid, fields, params, noise, rng, group, blocked);
   const pillars = raisePillars(grid, fields, params, noise, rng, group, blocked);
   const scree = spreadScree(grid, fields, params, noise, rng, group);
+
+  // rock detail texture on every decor material (instanced meshes included)
+  if (detail) {
+    group.traverse((o) => {
+      const mat = (o as THREE.Mesh).material;
+      if (mat instanceof THREE.MeshStandardMaterial) {
+        applyTriplanarDetail(mat, detail.rock, detail.rock, detail.uniforms);
+      }
+    });
+  }
 
   return { group, blocked, counts: { boulders, pillars, scree } };
 }

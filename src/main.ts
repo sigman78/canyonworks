@@ -9,6 +9,12 @@ import { defaultParams, defaultRenderOptions, type EditMode, type GenParams, typ
 import { BrushEditor } from './edit/editor';
 import { buildPanel } from './ui/panel';
 import { buildGridLines, buildPassabilityOverlay, disposeObject } from './viewer/overlays';
+import {
+  applyTriplanarDetail,
+  loadDetailTextures,
+  type DetailTextures,
+  type DetailUniforms,
+} from './viewer/terrainMaterial';
 import { IsoViewer } from './viewer/viewer';
 
 const STORAGE_KEY = 'canyonworks.params.v1';
@@ -29,6 +35,9 @@ class App {
   private gridLines: THREE.Object3D | null = null;
   private passOverlay: THREE.Object3D | null = null;
 
+  private readonly detailTex: DetailTextures = loadDetailTextures();
+  private readonly detailU: DetailUniforms = { scale: { value: 0.22 }, amount: { value: 0.75 } };
+
   private layout!: LayoutResult;
   private fields!: Fields;
   private blocked = new Uint8Array(0);
@@ -48,6 +57,9 @@ class App {
       metalness: 0,
       flatShading: this.render.flatShading,
     });
+    this.detailU.scale.value = this.render.texScale;
+    this.detailU.amount.value = this.render.texAmount;
+    applyTriplanarDetail(this.terrainMaterial, this.detailTex.cliff, this.detailTex.sand, this.detailU);
 
     this.editor = new BrushEditor(this.grid, this.viewer, {
       onQuickUpdate: () => this.quickUpdate(),
@@ -112,7 +124,10 @@ class App {
       this.mapRoot.remove(this.decorGroup);
       disposeObject(this.decorGroup);
     }
-    const decor = buildDecor(this.grid, this.fields, this.params, this.noise);
+    const decor = buildDecor(this.grid, this.fields, this.params, this.noise, {
+      rock: this.detailTex.rock,
+      uniforms: this.detailU,
+    });
     this.decorGroup = decor.group;
     this.blocked = decor.blocked;
     this.obstructed = computeObstructed(this.grid, this.layout.open, this.fields, this.params);
@@ -191,6 +206,8 @@ class App {
       this.terrainMaterial.flatShading = this.render.flatShading;
       this.terrainMaterial.needsUpdate = true;
     }
+    this.detailU.amount.value = this.render.texAmount;
+    this.detailU.scale.value = this.render.texScale;
     this.updateHud();
   }
 

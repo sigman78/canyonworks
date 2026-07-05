@@ -1,5 +1,38 @@
 # Worklog
 
+## 2026-07-05 — v0.7: rendering pass — GenAI textures + tri-planar detail shader
+
+Feedback: work on rendering quality — find/generate proper textures, play
+with shaders; texture blending/layering welcome to fight repetition. Free
+stock textures were an option, but nano-banana2 output matched the
+painterly concept style better than photoreal CC0 (Polyhaven/ambientCG)
+would.
+
+- `tools/gen-textures.mjs`: generates tileable detail textures with
+  nano-banana2 (`gemini-3-pro-image`) into `public/textures/` — cliff.jpg
+  (horizontal strata bands), sand.jpg (dust + ripples), rock.jpg (granular
+  weathered stone). Prompts insist on orthogonal view / even lighting /
+  seamless wrap; MirroredRepeatWrapping hides any residual seams. API key
+  read from `.env.local` (gitignored via `*.local`).
+- `src/viewer/terrainMaterial.ts`: tri-planar detail injected into
+  MeshStandardMaterial via onBeforeCompile. Side projections sample cliff
+  (bands stay horizontal), top samples sand; weights = normal^4.
+- Anti-repetition layering: each projection blends two samples of the same
+  texture (second rotated ~137 deg, rescaled 1.37x) by a low-frequency
+  variation field sampled from the texture itself, plus a very-low-freq
+  macro layer for large tonal patches. No visible tiling at map scale.
+- Palette preservation: first attempt multiplied the full-color texture ->
+  whole scene over-tinted orange, mesa caps lost. Fixed with
+  mostly-luminance detail (25% hue bleed): vertex palette (caps, crater
+  bands, crack slots, crevice shade) stays authoritative.
+- Decor: same injection with rock.jpg on every boulder/pillar/scree
+  material (instancing handled in the shader via instanceMatrix).
+- View panel: `texture amt` / `texture scale` sliders drive shared
+  uniforms — live, no recompile.
+
+Screenshots: `docs/shots/v0.7-textured.jpg`,
+`docs/shots/v0.7-textured-close.jpg`.
+
 ## 2026-07-05 — v0.6: hex-aligned fissures
 
 Feedback: add cracks/fissures on the terrain (and perhaps on ridge tops) as

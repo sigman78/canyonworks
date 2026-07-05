@@ -1,0 +1,143 @@
+# CanyonWorks — design notes
+
+Experimental sandbox (generator / visualizer / editor) for canyon-style tactical
+maps for **Nether-Mars** — an isometric hex-based game where programmed robot
+platforms explore and fight in Martian canyons.
+
+## Goals
+
+- **Tactical scale**: a few intersecting canyons, larger openings (arenas),
+  chokepoints. Canyons = walls + aesthetics; the game plays on the floor.
+- **Hex-aligned**: gameplay topology lives on a pointy-top hex grid (odd-r
+  offset storage). Everything passable/impassable resolves per hex.
+- **Don't waste map space**: `targetOpenFrac` guarantees a chosen share of
+  the map is *interior* floor (open cells whose whole neighborhood is open).
+- **Flat playable floor, gameplay-first**: passability is decided at the
+  hex level *before* geometry (`hexFlat`: open + SDF margin at center +
+  outside crater footprints). A blurred flatten-weight raster then forces
+  the ground to exactly `floorBase` on those hexes — walls, talus and
+  crater rims cannot creep onto passable cells, so visuals and passability
+  always agree. Obstructed = open but not flat (decorative). Hex-grid
+  overlay renders only passable, connected cells (largest component).
+- **Edge exits**: `edgePortals` corridors punch through the border seal and
+  run off the diorama edge — future map extension / fog-of-war sightline
+  blockers.
+- **Stylized look**: Sedona/AZ palette (rust strata, warm sand, pale mesa
+  caps), not photoreal Mars. Reference: `docs/concepts-01.jpg`.
+- **Fast reiteration**: full regen in ~150–250 ms; every parameter is a
+  lil-gui slider; brush editing with live feedback.
+
+## Generation pipeline
+
+```
+hex layout          canyon network carved on hex grid:
+ (layout.ts)        junction arenas + MST corridors + extra loops (intersections),
+                    noise wander, chokepoints, border seal, edge portals
+                    (carved after the seal), manual edit overrides.
+                    Re-carves at increasing width scale until the interior-floor
+                    target is met (chokepoints keep absolute width -> contrast
+                    preserved).
+      |
+passability raster  hex open/wall sampled at voxel-column resolution
+      |
+2D signed EDT       Felzenszwalb squared EDT both ways -> signed distance to
+ (sdf2d.ts)         canyon boundary per column, world units.
+      |
+column fields       floor height (fBm + crater dents w/ rims + talus rise at
+ (fields.ts)        wall base) and wall profile (ridge-perturbed boundary,
+                    eased rise, terraced strata, plateau-quantized tops,
+                    erosion gullies). Fissures: 1-2 hex cracks carved as
+                    small slots after the flatten pass (clipped on passable
+                    hexes). Output: groundH / wallMask / craterD / crackD.
+      |
+3D density          density = groundH - y, plus 3D fBm roughness on the cliff
+ (mesher.ts)        band only (gives mild overhangs). Volume boundary forced
+                    to air -> closed "diorama block" skirt.
+      |
+surface nets        one vertex per sign-crossing cell, quads across sign-
+ (surfacenets.ts)   changing edges. Vertex colors: slope+height dependent
+                    strata bands / floor sand / mesa caps / contact shading.
+      |
+decor modifiers     non-SDF instanced features (decor.ts):
+                    - boulders: perturbed icosahedra, wall-base biased,
+                      big ones mark their hex blocked
+                    - lone pillars: strata-colored noisy cylinders in openings,
+                      hex blocked
+                    - scree fans: small instanced rocks sliding from wall bases
+                      along +grad(SDF), decorative (passable)
+                    - craters are heightmap-baked (passable), tinted
+```
+
+### Key decisions
+
+- **Topology-first, not heightmap-first.** The hex open/wall set is the source
+  of truth; the 2D SDF + procedural profile turn it into 3D. This guarantees
+  the gameplay layer (open fraction, connectivity via MST) instead of hoping a
+  heightmap threshold cooperates.
+- **Per-column field precomputation.** The 3D density only varies in y via
+  `groundH - y` plus wall-band noise, so columns are computed once — meshing a
+  ~150×40×130 volume stays under 100 ms.
+- **Manual edits are an override layer** (`force open` / `force wall` per hex),
+  applied after auto-layout — so re-rolling parameters keeps your edits.
+- **Winding convention**: density > 0 = solid rock; surface nets face loop
+  order chosen cyclically per axis so normals point out of the rock.
+
+## Modules
+
+| path | role |
+|---|---|
+| `src/core/hex.ts` | pointy-top odd-r hex grid, axial math, world<->cell |
+| `src/core/rng.ts` | mulberry32 seeded PRNG |
+| `src/core/noise.ts` | simplex wrappers: fbm2/fbm3/ridged |
+| `src/gen/params.ts` | `GenParams` (serializable), defaults |
+| `src/gen/layout.ts` | canyon network on hex grid + open-target scaling |
+| `src/gen/sdf2d.ts` | exact signed EDT |
+| `src/gen/fields.ts` | per-column ground profile, craters |
+| `src/gen/surfacenets.ts` | surface nets isosurface |
+| `src/gen/mesher.ts` | density volume, meshing, Sedona vertex colors |
+| `src/gen/decor.ts` | boulders / pillars / scree + blocked-hex mask |
+| `src/viewer/viewer.ts` | fixed-iso ortho camera, pan/zoom, light rig |
+| `src/viewer/overlays.ts` | hex grid lines, passability tint overlay |
+| `src/edit/editor.ts` | brush painting, gizmo ring, undo stack |
+| `src/ui/panel.ts` | lil-gui parameter panel |
+| `src/main.ts` | app state, regen orchestration, HUD, import/export |
+
+## Determinism
+
+Same seed + same params + same edit layer = same map. RNG streams are split
+(layout / craters / decor) and all corridor randomness is pre-rolled so the
+open-target re-carve loop is stable.
+
+## Map export
+
+`Export map JSON` produces per-hex `{col,row,open,blocked}` (odd-r pointy-top)
+plus the generating params — intended as the interchange toward the actual
+game. Decor placement export (positions/types) is a TODO.
+
+## Palette (current)
+
+- cliff strata: `#83341a #b04a20 #9c3f1e #c9662f #d57d3e`
+- floor sand: `#db9d5c` -> `#bd7a44`, mesa cap `#edc79a`
+- contact/crevice shade `#54240f`, background haze `#e9c9a0`
+- crater bands: bowl `#9c6a54`, inner slope `#c08a5f`, rim crest `#f2d4a6`,
+  ejecta dust `#e7ba8a` (deliberately lighter/cooler than the rust walls so
+  craters don't read as more shadow)
+- fissures: slot interior `#2b1208` (near-black rust), weathered lip
+  `#ecc9a0`
+
+## Fissures (v0.6)
+
+Hex-aligned cracks that block crawling platforms but not flyers:
+
+- Each fissure spans **1–2 adjoining open hexes** (short heading-directed
+  walk through jittered centers; single-hex cracks are a segment through
+  their hex). Crack hexes drop out of `hexFlat` -> obstructed, so
+  passability is hex-crisp and a multi-hex crack is contiguous.
+- Geometry is a `crackD` distance raster -> semicircular slot profile with
+  fBm-jagged edges and tapered tips, carved after the flatten pass but
+  hard-clipped by the unblurred flat-hex mask: a passable hex never gets
+  holed; the dark tint alone crosses clipped corners to keep the visual
+  line continuous.
+- The walk is length-generic: raising `crackLenMax`/`crackDepth` brings
+  back long barrier chains that seal a region off (fly-only zones behind
+  fog-of-war) — deliberately kept small for now per feedback.

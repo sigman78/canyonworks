@@ -1,0 +1,22 @@
+{
+  "name": "canyonworks",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "lil-gui": "^0.20.0",
+    "simplex-noise": "^4.0.3",
+    "three": "^0.180.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.180.0",
+    "typescript": "~5.7.0",
+    "vite": "^6.0.0"
+  }
+}

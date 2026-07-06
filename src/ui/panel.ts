@@ -104,6 +104,10 @@ export function buildPanel(
     .add(render, 'showTexMasks')
     .name('texture masks')
     .onChange(() => cb.onRenderOptionChanged());
+  fView
+    .add(render, 'showMesaFog')
+    .name('mesa fog')
+    .onChange(() => cb.onRenderOptionChanged());
   const fTweak = gui.addFolder('Render tweaks');
   fTweak.close();
   fTweak
@@ -149,6 +153,10 @@ export function buildPanel(
   fTweak
     .add(render, 'shadowStrength', 0, 1, 0.05)
     .name('shadow strength')
+    .onChange(() => cb.onRenderOptionChanged());
+  fTweak
+    .add(render, 'cloudShadow', 0, 0.6, 0.05)
+    .name('cloud shadows')
     .onChange(() => cb.onRenderOptionChanged());
 
   const actions = {

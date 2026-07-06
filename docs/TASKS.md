@@ -145,6 +145,17 @@
       — idea 4, deferred
 - [ ] Geometry potholes / rock pools on tops — idea 5, deferred
 
+## Done (v0.13 — mesa fog look test)
+
+- [x] Decorative fog-of-war blankets over impassable mesa islands
+      (baked alpha from wallMask, triple-blurred coverage + per-layer
+      alpha blur, puffy shaped-fBm billows; five stacked sandstorm
+      sheets + screen-space apron toward the +x/+z borders that curtains
+      the diorama base in the iso view — no terrain-intersecting sheets;
+      View toggle; iterated on feedback)
+- [x] Drifting cloud shadows on direct sunlight (animated world-space
+      value noise, Render tweaks slider)
+
 ## Next
 
 - [ ] Decor edit brushes: place/erase boulders & pillars by hand; persist

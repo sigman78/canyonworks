@@ -71,6 +71,8 @@ export interface RenderOptions {
   wireframe: boolean;
   /** color-coded overlay of the texture-layer mask regions */
   showTexMasks: boolean;
+  /** decorative fog blankets over the impassable mesa islands */
+  showMesaFog: boolean;
   /** tri-planar detail texture strength (0 = vertex colors only) */
   texAmount: number;
   /** detail texture world-space frequency */
@@ -93,6 +95,8 @@ export interface RenderOptions {
   sunElevation: number;
   /** shadow darkness (0 = shadows off) */
   shadowStrength: number;
+  /** drifting cloud-shadow strength on direct sunlight (0 = off) */
+  cloudShadow: number;
 }
 
 export type EditMode = 'view' | 'carve' | 'wall';
@@ -163,6 +167,7 @@ export function defaultRenderOptions(): RenderOptions {
     showDecor: true,
     wireframe: false,
     showTexMasks: false,
+    showMesaFog: false,
     texAmount: 0.75,
     texScale: 0.22,
     texBump: 0.5,
@@ -174,5 +179,6 @@ export function defaultRenderOptions(): RenderOptions {
     sunAzimuth: -57,
     sunElevation: 45,
     shadowStrength: 1,
+    cloudShadow: 0.3,
   };
 }

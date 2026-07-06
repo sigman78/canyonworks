@@ -43,6 +43,10 @@ export interface DetailUniforms {
   ao: THREE.IUniform<number>;
   /** 1 = color-coded overlay of the texture-layer mask regions */
   maskDebug: THREE.IUniform<number>;
+  /** strength of the drifting cloud shadows on direct sunlight */
+  cloud: THREE.IUniform<number>;
+  /** world-space drift offset of the cloud field, advanced per frame */
+  cloudOffset: THREE.IUniform<THREE.Vector2>;
 }
 
 /** extra floor/plateau layers (terrain only, not decor) */
@@ -118,6 +122,8 @@ export function applyTriplanarDetail(
     shader.uniforms.uTriAmt = u.amount;
     shader.uniforms.uTriBump = u.bump;
     shader.uniforms.uTriRough = u.rough;
+    shader.uniforms.uCloudAmt = u.cloud;
+    shader.uniforms.uCloudOff = u.cloudOffset;
     shader.uniforms.uTriContrast = u.contrast;
     shader.uniforms.uTriHue = u.hue;
     shader.uniforms.uTriMacroA = u.macro;
@@ -176,6 +182,24 @@ export function applyTriplanarDetail(
         uniform float uTriContrast;
         uniform float uTriHue;
         uniform float uTriMacroA;
+        uniform float uCloudAmt;
+        uniform vec2 uCloudOff;
+        // cheap value noise (patch masks + drifting cloud shadows)
+        float triHash( vec2 p ) {
+          return fract( sin( dot( p, vec2( 127.1, 311.7 ) ) ) * 43758.5453 );
+        }
+        float triNoise( vec2 p ) {
+          vec2 i = floor( p );
+          vec2 f = fract( p );
+          f = f * f * ( 3.0 - 2.0 * f );
+          return mix(
+            mix( triHash( i ), triHash( i + vec2( 1.0, 0.0 ) ), f.x ),
+            mix( triHash( i + vec2( 0.0, 1.0 ) ), triHash( i + vec2( 1.0, 1.0 ) ), f.x ),
+            f.y );
+        }
+        float triMask( vec2 p ) {
+          return 0.65 * triNoise( p ) + 0.35 * triNoise( p * 2.7 + 13.1 );
+        }
         ${vertexAo ? 'uniform float uTriAo;\n        varying float vTriAo;\n        varying vec2 vTriFacies;' : ''}
         ${sandContact ? 'uniform vec3 uSandC;\n        uniform vec2 uSandR;\n        varying float vSandY;' : ''}
         // roughness offset + layer mask weights, computed in color_fragment
@@ -196,23 +220,7 @@ export function applyTriplanarDetail(
         uniform sampler2D uTriRubble;
         uniform sampler2D uTriCrater;
         uniform float uTriPlateauY;
-        uniform float uTriMaskDbg;
-        // cheap value noise for world-space patch masks
-        float triHash( vec2 p ) {
-          return fract( sin( dot( p, vec2( 127.1, 311.7 ) ) ) * 43758.5453 );
-        }
-        float triNoise( vec2 p ) {
-          vec2 i = floor( p );
-          vec2 f = fract( p );
-          f = f * f * ( 3.0 - 2.0 * f );
-          return mix(
-            mix( triHash( i ), triHash( i + vec2( 1.0, 0.0 ) ), f.x ),
-            mix( triHash( i + vec2( 0.0, 1.0 ) ), triHash( i + vec2( 1.0, 1.0 ) ), f.x ),
-            f.y );
-        }
-        float triMask( vec2 p ) {
-          return 0.65 * triNoise( p ) + 0.35 * triNoise( p * 2.7 + 13.1 );
-        }`
+        uniform float uTriMaskDbg;`
             : ''
         }`,
       )
@@ -371,20 +379,27 @@ export function applyTriplanarDetail(
         }`,
       );
 
-    if (vertexAo) {
-      shader.fragmentShader = shader.fragmentShader.replace(
-        '#include <aomap_fragment>',
-        `#include <aomap_fragment>
-        {
-          // baked crevice AO: full on the indirect (hemi) light, partial on
-          // the sun so pockets still read shaded under direct light
-          float triAo = mix( 1.0, pow( vTriAo, 2.2 ), uTriAo );
-          reflectedLight.indirectDiffuse *= triAo;
-          reflectedLight.directDiffuse *= mix( 1.0, triAo, 0.45 );
-          reflectedLight.directSpecular *= triAo;
-        }`,
-      );
-    }
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <aomap_fragment>',
+      `#include <aomap_fragment>
+      {
+        ${
+          vertexAo
+            ? `// baked crevice AO: full on the indirect (hemi) light, partial on
+        // the sun so pockets still read shaded under direct light
+        float triAo = mix( 1.0, pow( vTriAo, 2.2 ), uTriAo );
+        reflectedLight.indirectDiffuse *= triAo;
+        reflectedLight.directDiffuse *= mix( 1.0, triAo, 0.45 );
+        reflectedLight.directSpecular *= triAo;`
+            : ''
+        }
+        // drifting cloud shadows: big soft blobs cutting the direct sun
+        float triCld = triMask( ( vTriPos.xz + uCloudOff ) * 0.055 );
+        float triCldShadow = 1.0 - uCloudAmt * smoothstep( 0.42, 0.78, triCld );
+        reflectedLight.directDiffuse *= triCldShadow;
+        reflectedLight.directSpecular *= triCldShadow;
+      }`,
+    );
   };
   // uniforms differ per material but the program is shared per variant
   mat.customProgramCacheKey = () =>

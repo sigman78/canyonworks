@@ -1,5 +1,47 @@
 # Worklog
 
+## 2026-07-05 — v0.13: decorative mesa fog of war (look test)
+
+Goal: test a decorative "fog of war" veiling the large impassable mesa
+islands (future: hide fly-only / unexplored regions).
+
+- `src/viewer/mesaFog.ts`: alpha mask baked from the wall raster
+  (wallMask > 0.35), box-blurred well past the rims, feathered at the
+  raster border (no hard plane edge over the diorama rim). Five
+  stacked translucent sheets (MeshBasicMaterial, depthWrite off,
+  renderOrder after opaque terrain), each baking its OWN puff pattern —
+  shaped fBm with real gaps between billows, then the whole alpha field
+  box-blurred again so billows melt together instead of showing crisp
+  noise contours — and a sandstorm dust tint that darkens toward the
+  lower layers (240/198/146 -> 212/148/86), puff cores slightly darker
+  (thick dust). Iterated on feedback twice: v1 was two thin whitish
+  sheets on deep-wall only (too small, flat, white); v2 three sheets;
+  v3 five sheets, triple coverage blur + per-layer alpha blur.
+- **Screen-space apron** (feedback iteration): a first attempt at
+  "bottom coverage" used low sheets intersecting the terrain — rejected,
+  semitransparent plane/terrain intersections look ugly. Instead the
+  bake grid extends ~14 wu past the +x/+z borders (the two directions
+  that point toward the BOTTOM OF THE SCREEN in the fixed iso view),
+  continuing the border alpha outward with a long fade. The high sheets
+  then visually curtain the diorama base that used to protrude under
+  the fog — the map reads as emerging from an endless dust sea, and no
+  sheet ever touches terrain. The -x/-z (top-of-screen) borders keep
+  the short feather.
+- Rebuilt each regen from the current fields; `mesa fog` toggle in the
+  View folder (off by default).
+- Look: a layered dust-storm bank swallowing the mesa islands, billowy
+  fingers spilling over the canyon rims; the playable floor stays
+  readable through the clear channel.
+- **Drifting cloud shadows** (same session): big soft value-noise blobs
+  cut the DIRECT sunlight (directDiffuse/directSpecular in the shader's
+  aomap injection, now unconditional — the noise helpers moved out of
+  the layers-only block). The offset advances each frame in the render
+  loop, so shadow patches drift slowly across the map; terrain and
+  decor darken consistently. `cloud shadows` slider in Render tweaks
+  (0–0.6, default 0.3). `docs/shots/v0.13-cloud-shadows.jpg`.
+
+Screenshot: `docs/shots/v0.13-mesa-fog.jpg`.
+
 ## 2026-07-05 — v0.12: mesa top variety — levels, doming, drainage
 
 Feedback: "the elephant in the room — flat and too similar mesa tops."

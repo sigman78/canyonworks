@@ -105,6 +105,7 @@ decor modifiers     non-SDF instanced features (decor.ts):
 | `src/gen/decor.ts` | boulders / pillars / scree + blocked-hex mask |
 | `src/viewer/viewer.ts` | fixed-iso ortho camera, pan/zoom, light rig |
 | `src/viewer/overlays.ts` | hex grid lines, passability tint overlay |
+| `src/viewer/mesaFog.ts` | decorative fog blankets over mesa islands |
 | `src/edit/editor.ts` | brush painting, gizmo ring, undo stack |
 | `src/ui/panel.ts` | lil-gui parameter panel |
 | `src/main.ts` | app state, regen orchestration, HUD, import/export |

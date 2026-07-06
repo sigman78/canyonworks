@@ -9,6 +9,7 @@ import { defaultParams, defaultRenderOptions, type EditMode, type GenParams, typ
 import { BrushEditor } from './edit/editor';
 import { buildPanel } from './ui/panel';
 import { buildGridLines, buildPassabilityOverlay, disposeObject } from './viewer/overlays';
+import { buildMesaFog } from './viewer/mesaFog';
 import {
   applyTriplanarDetail,
   loadDetailTextures,
@@ -32,6 +33,7 @@ class App {
   private terrainMesh: THREE.Mesh | null = null;
   private terrainMaterial: THREE.MeshStandardMaterial;
   private decorGroup: THREE.Group | null = null;
+  private fogGroup: THREE.Group | null = null;
   private gridLines: THREE.Object3D | null = null;
   private passOverlay: THREE.Object3D | null = null;
 
@@ -47,6 +49,8 @@ class App {
     macro: { value: 0.3 },
     ao: { value: 0.65 },
     maskDebug: { value: 0 },
+    cloud: { value: 0.3 },
+    cloudOffset: { value: new THREE.Vector2() },
   };
 
   private layout!: LayoutResult;
@@ -108,6 +112,9 @@ class App {
 
     const loop = () => {
       requestAnimationFrame(loop);
+      // slow cloud-shadow drift across the map
+      const t = performance.now() * 0.001;
+      this.detailU.cloudOffset.value.set(t * 0.55, t * 0.21);
       this.viewer.render();
     };
     loop();
@@ -156,6 +163,13 @@ class App {
     this.blocked = decor.blocked;
     this.obstructed = computeObstructed(this.grid, this.layout.open, this.fields, this.params);
     this.mapRoot.add(this.decorGroup);
+
+    if (this.fogGroup) {
+      this.mapRoot.remove(this.fogGroup);
+      disposeObject(this.fogGroup);
+    }
+    this.fogGroup = buildMesaFog(this.fields, this.noise);
+    this.mapRoot.add(this.fogGroup);
 
     this.rebuildOverlays();
     this.applyRenderOptions();
@@ -226,6 +240,7 @@ class App {
     if (this.gridLines) this.gridLines.visible = this.render.showGrid;
     if (this.passOverlay) this.passOverlay.visible = this.render.showPassability;
     if (this.decorGroup) this.decorGroup.visible = this.render.showDecor;
+    if (this.fogGroup) this.fogGroup.visible = this.render.showMesaFog;
     if (this.terrainMaterial.flatShading !== this.render.flatShading) {
       this.terrainMaterial.flatShading = this.render.flatShading;
       this.terrainMaterial.needsUpdate = true;
@@ -249,6 +264,7 @@ class App {
     this.detailU.macro.value = this.render.texMacro;
     this.detailU.ao.value = this.render.aoAmount;
     this.detailU.maskDebug.value = this.render.showTexMasks ? 1 : 0;
+    this.detailU.cloud.value = this.render.cloudShadow;
     this.viewer.setSun(this.render.sunAzimuth, this.render.sunElevation);
     this.viewer.sun.shadow.intensity = this.render.shadowStrength;
   }

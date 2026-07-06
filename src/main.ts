@@ -264,7 +264,8 @@ class App {
     this.detailU.macro.value = this.render.texMacro;
     this.detailU.ao.value = this.render.aoAmount;
     this.detailU.maskDebug.value = this.render.showTexMasks ? 1 : 0;
-    this.detailU.cloud.value = this.render.cloudShadow;
+    // cloud shadows belong to the storm look — active only with mesa fog on
+    this.detailU.cloud.value = this.render.showMesaFog ? this.render.cloudShadow : 0;
     this.viewer.setSun(this.render.sunAzimuth, this.render.sunElevation);
     this.viewer.sun.shadow.intensity = this.render.shadowStrength;
   }

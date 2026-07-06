@@ -38,7 +38,9 @@ islands (future: hide fly-only / unexplored regions).
   the layers-only block). The offset advances each frame in the render
   loop, so shadow patches drift slowly across the map; terrain and
   decor darken consistently. `cloud shadows` slider in Render tweaks
-  (0–0.6, default 0.3). `docs/shots/v0.13-cloud-shadows.jpg`.
+  (0–0.6, default 0.3), but the effect is active only while `mesa fog`
+  is on — it belongs to the storm look; the base scene stays static.
+  `docs/shots/v0.13-cloud-shadows.jpg`.
 
 Screenshot: `docs/shots/v0.13-mesa-fog.jpg`.
 

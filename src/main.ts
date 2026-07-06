@@ -46,6 +46,7 @@ class App {
     hue: { value: 0.3 },
     macro: { value: 0.3 },
     ao: { value: 0.65 },
+    maskDebug: { value: 0 },
   };
 
   private layout!: LayoutResult;
@@ -69,7 +70,14 @@ class App {
     });
     this.syncDetailUniforms();
     applyTriplanarDetail(this.terrainMaterial, this.detailTex.cliff, this.detailTex.sand, this.detailU, {
-      layers: { dunes: this.detailTex.dunes, gravel: this.detailTex.gravel, mesa: this.detailTex.mesa },
+      layers: {
+        dunes: this.detailTex.dunes,
+        gravel: this.detailTex.gravel,
+        mesa: this.detailTex.mesa,
+        drift: this.detailTex.drift,
+        rubble: this.detailTex.rubble,
+        crater: this.detailTex.crater,
+      },
       vertexAo: true, // terrain mesh carries the baked ao attribute
     });
 
@@ -116,8 +124,9 @@ class App {
     }
     const edits = this.editor.rebind(this.grid);
 
-    // plateau tops blend to the mesa detail layer above this height
-    this.detailU.plateauY.value = this.params.wallHeight * 0.6;
+    // plateau tops blend to the mesa detail layer above this height (low
+    // enough to catch mesas sunk by the per-region altitude offsets)
+    this.detailU.plateauY.value = this.params.wallHeight * 0.45;
 
     this.noise = makeNoise(this.params.seed);
     this.layout = generateLayout(this.grid, this.params, this.noise, edits);
@@ -239,6 +248,7 @@ class App {
     this.detailU.hue.value = this.render.texHue;
     this.detailU.macro.value = this.render.texMacro;
     this.detailU.ao.value = this.render.aoAmount;
+    this.detailU.maskDebug.value = this.render.showTexMasks ? 1 : 0;
     this.viewer.setSun(this.render.sunAzimuth, this.render.sunElevation);
     this.viewer.sun.shadow.intensity = this.render.shadowStrength;
   }

@@ -1,5 +1,68 @@
 # Worklog
 
+## 2026-07-05 — v0.12: mesa top variety — levels, doming, drainage
+
+Feedback: "the elephant in the room — flat and too similar mesa tops."
+Picked ideas 1–3 of five proposed (per-mesa levels, doming + sand
+hollows, drainage channels).
+
+- **Per-mesa altitude offsets** (`mesaOffsets` in fields.ts): closed
+  (wall) columns flood-filled into connected regions; each region rolls
+  an offset in whole plateau-quantization steps — sunken (-1, 30%),
+  base (30%), raised (+1, 28%), towering (+2, 12%). Labels dilated a few
+  columns into the open fringe so the ridge-perturbed boundary samples a
+  consistent offset. Adjacent mesas at different heights give the map a
+  skyline; regions are naturally separated by corridors.
+- **Doming**: low-frequency fBm swell (±0.8 wu) added to the wall height,
+  weighted by `smoothstep(0.55, 0.95, w)` so it fades at the rim — tops
+  roll and tilt but silhouette edges stay crisp. The same dome field
+  drives color: hollows (dome < -0.12) blend toward floor sand -> sand
+  pockets collect in the dips.
+- **Drainage channels**: the existing flank-gully ridged-noise field now
+  also carves across the tops (`0.55 * smoothstep(0.6, 0.95, w)` on top
+  of the mid-flank band weight). Same field = channels continue over the
+  rim and notch it where they run off. Channel lines also darken the top
+  color slightly (desert varnish).
+- Plateau color/texture thresholds lowered (0.66 -> 0.45 wallHeight in
+  colorize, plateauY uniform 0.6 -> 0.45) so sunken mesas keep their
+  mesa look; deep channel bottoms read sandy (wash bottoms).
+- **Mesa-top texture facies** (follow-up feedback: tops still needed
+  floor-style texture variety): the plateau layer is no longer a single
+  mesa texture. A per-vertex `facies` attribute bakes the dome-hollow
+  morphology (same fBm field as the swell); the shader pools a sand
+  layer in hollows (broken up by world-space noise) and scatters rubble
+  patches over the rest of the slickrock. Bump gradients and roughness
+  follow the same weights. Sand-pocket vertex colors + drift texture
+  land in the same dips -> texture follows morphology.
+- **Mesa-specific textures** (feedback: don't reuse the floor set up
+  top): two more nano-banana2 textures — drift.jpg (thin pale sand
+  sheet drifted over slickrock, bare rock showing through) and
+  rubble.jpg (dark-varnished chip lag on pale bedrock). The plateau
+  facies use these instead of the floor's dunes/gravel, so tops read as
+  wind-swept caprock rather than a raised canyon floor.
+- **Crater interior texture**: craters get their own layer — crater.jpg
+  (nano-banana2: cool ash-taupe dust, hairline desiccation cracks,
+  glassy ejecta pebbles). The `facies` attribute grew to a vec2; its y
+  channel bakes a crater weight from craterD (1 in the bowl, fading at
+  the rim crest), and the shader blends the ash layer over the floor
+  inside that weight — bowls read as a different material that hands
+  off to the ordinary floor exactly at the rim, matching the vertex
+  color bands.
+- **Texture-mask debug overlay** (View > texture masks): color-codes
+  every layer region at once — tan base sand, orange dunes, brown
+  gravel, magenta crater interiors, sky slickrock, blue drift, green
+  rubble; steep faces grayed. Live uniform, no recompile.
+  `docs/shots/v0.12-texture-masks.jpg`.
+- Bug the offsets exposed (user: "black ring at the top of walls"): the
+  strata palette was indexed `band % 5`, so walls taller than 5 bands
+  wrapped back to the darkest bottom stratum right under the pale cap.
+  Walls never got that tall before towering mesas. The index now clamps
+  at the light end of the sequence, with a small per-band shade jitter
+  so tall walls keep readable banding.
+
+Screenshots: `docs/shots/v0.12-mesa-levels.jpg`,
+`docs/shots/v0.12-mesa-tops-close.jpg`.
+
 ## 2026-07-05 — v0.11: pillar variety + sand ground-contact blend
 
 Goal: pillar variation (height, profile, lean, cap or no cap) and a way

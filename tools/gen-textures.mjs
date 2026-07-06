@@ -54,6 +54,25 @@ const TEXTURES = {
     'potholes and small dark rock pools with sediment, subtle painted ' +
     'depth in the cracks (no cast shadows). ' +
     COMMON,
+  // ---- mesa-top specific layers (v0.12b) ----
+  drift:
+    'Thin sheet of pale wind-blown sand drifted over pale rust-tan ' +
+    'slickrock bedrock seen from directly above, delicate wind ripples in ' +
+    'the sand, patches of smooth bare rock showing through the thin drift, ' +
+    'soft painted form shading along ripple crests only (no cast shadows). ' +
+    COMMON,
+  rubble:
+    'Sparse lag of small angular dark-varnished stone chips and weathered ' +
+    'caprock fragments scattered over pale rust-tan slickrock bedrock seen ' +
+    'from directly above, chips half-embedded, wide bare bedrock areas ' +
+    'between loose stone clusters. ' +
+    COMMON,
+  crater:
+    'Fine powdery impact-crater floor of cool ash-taupe dust seen from ' +
+    'directly above, hairline desiccation cracks, scattered tiny sharp ' +
+    'ejecta fragments and small glassy pebbles half-buried in the dust, ' +
+    'subtle patchy tonal variation between grey-taupe and dusty rose. ' +
+    COMMON,
 };
 
 async function generate(name, prompt) {

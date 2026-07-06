@@ -46,8 +46,12 @@ passability raster  hex open/wall sampled at voxel-column resolution
 column fields       floor height (fBm + crater dents w/ rims + talus rise at
  (fields.ts)        wall base) and wall profile (ridge-perturbed boundary,
                     eased rise, terraced strata, plateau-quantized tops,
-                    erosion gullies). Fissures: 1-2 hex cracks carved as
-                    small slots after the flatten pass (clipped on passable
+                    erosion gullies). Mesa tops: per-region altitude
+                    offsets (flood-filled wall regions, quantized steps),
+                    rim-faded doming w/ sand-pocket hollows, drainage
+                    channels continuous with the flank gullies (rim
+                    notches). Fissures: 1-2 hex cracks carved as small
+                    slots after the flatten pass (clipped on passable
                     hexes). Output: groundH / wallMask / craterD / crackD.
       |
 3D density          density = groundH - y, plus 3D fBm roughness on the cliff
@@ -123,7 +127,11 @@ game. Decor placement export (positions/types) is a TODO.
   `tools/gen-textures.mjs` with nano-banana2 / gemini-3-pro-image; API key
   in `.env.local`, gitignored): cliff strata / floor sand / rock grain /
   dune ripples / rocky gravel pavement / cracked mesa slickrock with rock
-  pools. Regenerate any of them with `node tools/gen-textures.mjs [name]`.
+  pools / drift (thin sand sheet over slickrock, mesa hollows) / rubble
+  (dark chip lag on bedrock, mesa tops) / crater (ash-taupe dust with
+  cracks + ejecta pebbles, crater bowls up to the rim). Regenerate any
+  of them with `node tools/gen-textures.mjs [name]`. A `texture masks`
+  View toggle false-colors all layer regions at once for tuning.
 - **Tri-planar detail shader** (`src/viewer/terrainMaterial.ts`): injected
   into MeshStandardMaterial via onBeforeCompile — no custom material, all
   lights/shadows/fog keep working. Side projections use the cliff texture
@@ -137,9 +145,10 @@ game. Decor placement export (positions/types) is a TODO.
 - **Multi-layer ground (v0.8)**: the top projection scatters dune-ripple
   and rocky-pavement patches over the base sand, masked by 2-octave value
   noise in world space (patches span a few hexes regardless of texture
-  scale). Above `wallHeight * 0.6` the ground layer blends into the mesa
-  texture — plateau tops read as cracked slickrock plates with dark rock
-  pools instead of bare cap color.
+  scale). Above `wallHeight * 0.45` the ground layer blends into the
+  mesa facies (v0.12): slickrock plates, dune sand pooled in the dome
+  hollows (per-vertex `facies` morphology attribute baked at mesh time),
+  and rubble patches — bump and roughness follow the same weights.
 - **Palette-preserving blend**: detail is applied as a mostly-luminance
   multiplier (hue bleed slider, default 0.3) over the vertex colors, so
   the hand-tuned Sedona palette — mesa caps, crater bands, fissure slots,

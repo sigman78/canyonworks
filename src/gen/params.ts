@@ -69,6 +69,8 @@ export interface RenderOptions {
   showDecor: boolean;
   /** render terrain + decor as wireframe (mesh showcase) */
   wireframe: boolean;
+  /** color-coded overlay of the texture-layer mask regions */
+  showTexMasks: boolean;
   /** tri-planar detail texture strength (0 = vertex colors only) */
   texAmount: number;
   /** detail texture world-space frequency */
@@ -160,6 +162,7 @@ export function defaultRenderOptions(): RenderOptions {
     flatShading: true,
     showDecor: true,
     wireframe: false,
+    showTexMasks: false,
     texAmount: 0.75,
     texScale: 0.22,
     texBump: 0.5,

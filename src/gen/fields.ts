@@ -147,7 +147,12 @@ export function buildFields(
   boxBlur(flattenW, nx, nz, blurR);
   boxBlur(flattenW, nx, nz, blurR);
 
-  // 6. per-column ground profile
+  // 6. per-mesa level offsets: each connected wall region gets its own
+  // altitude (in whole plateau-quantization steps) so mesas stop reading
+  // as one uniform slab
+  const mesaOff = mesaOffsets(openRaster, nx, nz, params);
+
+  // 7. per-column ground profile
   const groundH = new Float32Array(n);
   const wallMask = new Float32Array(n);
   const craterD = new Float32Array(n).fill(9);
@@ -200,6 +205,12 @@ export function buildFields(
           fbm2(n2, x * params.wallFreq + 31.7, z * params.wallFreq - 17.3, 4) * params.wallVar;
         // plateau-ish tops: gentle quantization of the wall height itself
         wallH = lerp(wallH, terrace(wallH, params.terraceStep * 1.6), 0.5);
+        // per-mesa altitude offset (quantized steps, constant per region)
+        wallH += mesaOff[i];
+        // doming: low-frequency swell over the mesa interior; fades toward
+        // the rim so the silhouette edge stays crisp
+        const dome = fbm2(n2, x * 0.045 + 11.0, z * 0.045 - 23.0, 3);
+        wallH += dome * 0.8 * smoothstep(0.55, 0.95, w);
 
         h = lerp(floorH + params.talusAmp, wallH, easeWall(w));
 
@@ -207,9 +218,11 @@ export function buildFields(
         if (params.terraceAmt > 0 && w > 0.02 && w < 0.98) {
           h = lerp(h, terrace(h, params.terraceStep), params.terraceAmt * bandWeight(w));
         }
-        // erosion gullies down the flank
+        // erosion gullies down the flank, continuing as drainage channels
+        // across the top (same noise field -> channels notch the rim where
+        // they run off the edge)
         const gully = ridged2(n2, x * 0.35 + 7.7, z * 0.35 - 3.1, 2);
-        h -= gully * gully * 0.5 * bandWeight(w);
+        h -= gully * gully * (0.5 * bandWeight(w) + 0.55 * smoothstep(0.6, 0.95, w));
       }
 
       // enforce the hex-level floor decision: passable hexes are perfectly
@@ -288,6 +301,68 @@ export function computeObstructed(
   for (let i = 0; i < grid.count; i++) {
     if (open[i] && !fields.hexFlat[i]) out[i] = 1;
   }
+  return out;
+}
+
+/**
+ * Flood-fill the closed (wall) columns into connected mesa regions and give
+ * each region a random altitude offset in whole plateau-quantization steps.
+ * Labels are dilated a few columns into the open fringe so the ridge-
+ * perturbed wall boundary samples a consistent offset.
+ */
+function mesaOffsets(
+  openRaster: Uint8Array,
+  nx: number,
+  nz: number,
+  params: GenParams,
+): Float32Array {
+  const n = nx * nz;
+  const rng = mulberry32(params.seed ^ 0x2545f491);
+  const step = params.terraceStep * 1.6;
+  const label = new Int32Array(n).fill(-1);
+  const offsets: number[] = [];
+  const stack: number[] = [];
+
+  for (let start = 0; start < n; start++) {
+    if (openRaster[start] || label[start] >= 0) continue;
+    const id = offsets.length;
+    // level pick: sunken / base / raised / towering
+    const r = rng();
+    offsets.push((r < 0.3 ? -1 : r < 0.6 ? 0 : r < 0.88 ? 1 : 2) * step);
+    label[start] = id;
+    stack.push(start);
+    while (stack.length) {
+      const c = stack.pop()!;
+      const cx = c % nx;
+      const push = (j: number) => {
+        if (!openRaster[j] && label[j] < 0) {
+          label[j] = id;
+          stack.push(j);
+        }
+      };
+      if (cx > 0) push(c - 1);
+      if (cx < nx - 1) push(c + 1);
+      if (c >= nx) push(c - nx);
+      if (c < n - nx) push(c + nx);
+    }
+  }
+
+  // dilate labels into unlabeled (open) columns — a handful of passes is
+  // enough to cover the ridge-perturbation reach
+  for (let pass = 0; pass < 5; pass++) {
+    const prev = Int32Array.from(label);
+    for (let i = 0; i < n; i++) {
+      if (prev[i] >= 0) continue;
+      const cx = i % nx;
+      if (cx > 0 && prev[i - 1] >= 0) label[i] = prev[i - 1];
+      else if (cx < nx - 1 && prev[i + 1] >= 0) label[i] = prev[i + 1];
+      else if (i >= nx && prev[i - nx] >= 0) label[i] = prev[i - nx];
+      else if (i < n - nx && prev[i + nx] >= 0) label[i] = prev[i + nx];
+    }
+  }
+
+  const out = new Float32Array(n);
+  for (let i = 0; i < n; i++) out[i] = label[i] >= 0 ? offsets[label[i]] : 0;
   return out;
 }
 

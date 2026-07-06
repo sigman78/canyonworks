@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { clamp01, fbm3, smoothstep, type NoiseKit } from '../core/noise';
+import { clamp01, fbm2, fbm3, ridged2, smoothstep, type NoiseKit } from '../core/noise';
 import type { Fields } from './fields';
 import type { GenParams } from './params';
 import { surfaceNets } from './surfacenets';
@@ -179,6 +179,10 @@ function colorize(
   const nrm = geometry.getAttribute('normal') as THREE.BufferAttribute;
   const count = pos.count;
   const colors = new Float32Array(count * 3);
+  // morphology channels for the shader: x = dome hollow (same field as the
+  // mesa-top swell in fields.ts) -> drift sand pools there; y = crater
+  // interior weight (1 in the bowl, fading out at the rim crest)
+  const facies = new Float32Array(count * 2);
   const { n2 } = noise;
   const tmp = new THREE.Color();
   const strataStep = Math.max(0.4, params.terraceStep);
@@ -191,19 +195,37 @@ function colorize(
     const s2 = fields.sampleS2(x, z);
 
     const dither = fbm3(noise.n3, x * 0.35, y * 0.5, z * 0.35, 2);
+    const dome = fbm2(n2, x * 0.045 + 11.0, z * 0.045 - 23.0, 3);
+    const craterDist = sampleCraterD(fields, x, z);
+    facies[i * 2] = clamp01((-dome - 0.05) / 0.55);
+    facies[i * 2 + 1] = 1 - smoothstep(0.8, 1.02, craterDist);
 
     if (nY < 0.65) {
-      // cliff face: quantized strata bands
+      // cliff face: quantized strata bands. The index CLAMPS at the top of
+      // the authored dark->light sequence — cycling it wrapped the darkest
+      // bottom stratum back in as a near-black ring on tall (per-mesa
+      // offset) walls.
       const band = Math.floor((y + dither * 0.35) / strataStep);
-      const bi = ((band % STRATA.length) + STRATA.length) % STRATA.length;
+      const bi = Math.min(Math.max(band, 0), STRATA.length - 1);
       tmp.copy(STRATA[bi]);
+      if (band > STRATA.length - 1) {
+        // above the sequence: stay in the light family, subtle per-band
+        // shade jitter keeps the banding readable
+        const j = Math.sin(band * 12.9898) * 43758.5453;
+        tmp.multiplyScalar(0.92 + (j - Math.floor(j)) * 0.12);
+      }
       // slight vertical gradient: darker at base
       const baseDark = clamp01(1 - y / (params.wallHeight + params.wallVar));
       tmp.multiplyScalar(0.95 - baseDark * 0.15 + dither * 0.04);
-    } else if (y > params.wallHeight * 0.66) {
-      // plateau top
+    } else if (y > params.wallHeight * 0.45) {
+      // plateau top (threshold is low: per-mesa offsets can sink a top by
+      // nearly two quantization steps)
       tmp.copy(CAP).lerp(STRATA[4], clamp01(0.3 + dither * 0.4));
-      tmp.multiplyScalar(1 + dither * 0.04);
+      // sand pockets collect in the dome hollows (same field as the swell)
+      if (dome < -0.12) tmp.lerp(FLOOR_A, smoothstep(0.12, 0.5, -dome) * 0.6);
+      // drainage lines read darker (desert varnish in the channels)
+      const g = ridged2(n2, x * 0.35 + 7.7, z * 0.35 - 3.1, 2);
+      tmp.multiplyScalar(1 - g * g * 0.22 + dither * 0.04);
     } else {
       // canyon floor
       const t = clamp01(0.5 + fbm2Cheap(n2, x, z) * 0.7);
@@ -211,7 +233,7 @@ function colorize(
 
       // crater bands: scorched bowl -> rust inner slope -> bleached rim
       // crest -> pale ejecta dust fading out (edges broken up by dither)
-      const cd = sampleCraterD(fields, x, z);
+      const cd = craterDist;
       if (cd < 1.5) {
         const ring = cd + dither * 0.08;
         if (ring < 0.85) {
@@ -248,6 +270,7 @@ function colorize(
   }
 
   geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  geometry.setAttribute('facies', new THREE.BufferAttribute(facies, 2));
 }
 
 function fbm2Cheap(n2: NoiseKit['n2'], x: number, z: number): number {

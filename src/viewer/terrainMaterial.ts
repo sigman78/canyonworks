@@ -18,6 +18,9 @@ export interface DetailTextures {
   dunes: THREE.Texture;
   gravel: THREE.Texture;
   mesa: THREE.Texture;
+  drift: THREE.Texture;
+  rubble: THREE.Texture;
+  crater: THREE.Texture;
 }
 
 /** shared slider-driven uniforms — one object mutated by the GUI */
@@ -38,6 +41,8 @@ export interface DetailUniforms {
   macro: THREE.IUniform<number>;
   /** strength of the baked per-vertex ambient occlusion */
   ao: THREE.IUniform<number>;
+  /** 1 = color-coded overlay of the texture-layer mask regions */
+  maskDebug: THREE.IUniform<number>;
 }
 
 /** extra floor/plateau layers (terrain only, not decor) */
@@ -45,6 +50,12 @@ export interface DetailLayers {
   dunes: THREE.Texture;
   gravel: THREE.Texture;
   mesa: THREE.Texture;
+  /** mesa-top hollows: thin sand drift over slickrock */
+  drift: THREE.Texture;
+  /** mesa-top lag: dark-varnished chips on bedrock */
+  rubble: THREE.Texture;
+  /** crater interiors: ash-taupe dust with cracks and ejecta pebbles */
+  crater: THREE.Texture;
 }
 
 export interface DetailOptions {
@@ -76,6 +87,9 @@ export function loadDetailTextures(): DetailTextures {
     dunes: load('textures/dunes.jpg'),
     gravel: load('textures/gravel.jpg'),
     mesa: load('textures/mesa.jpg'),
+    drift: load('textures/drift.jpg'),
+    rubble: load('textures/rubble.jpg'),
+    crater: load('textures/crater.jpg'),
   };
 }
 
@@ -116,7 +130,11 @@ export function applyTriplanarDetail(
       shader.uniforms.uTriDunes = { value: layers.dunes };
       shader.uniforms.uTriGravel = { value: layers.gravel };
       shader.uniforms.uTriMesa = { value: layers.mesa };
+      shader.uniforms.uTriDrift = { value: layers.drift };
+      shader.uniforms.uTriRubble = { value: layers.rubble };
+      shader.uniforms.uTriCrater = { value: layers.crater };
       shader.uniforms.uTriPlateauY = u.plateauY;
+      shader.uniforms.uTriMaskDbg = u.maskDebug;
     }
 
     shader.vertexShader = shader.vertexShader
@@ -125,13 +143,13 @@ export function applyTriplanarDetail(
         `#include <common>
         varying vec3 vTriPos;
         varying vec3 vTriNormal;
-        ${vertexAo ? 'attribute float ao;\n        varying float vTriAo;' : ''}
+        ${vertexAo ? 'attribute float ao;\n        varying float vTriAo;\n        attribute vec2 facies;\n        varying vec2 vTriFacies;' : ''}
         ${sandContact ? 'varying float vSandY;' : ''}`,
       )
       .replace(
         '#include <fog_vertex>',
         `#include <fog_vertex>
-        ${vertexAo ? 'vTriAo = ao;' : ''}
+        ${vertexAo ? 'vTriAo = ao;\n        vTriFacies = facies;' : ''}
         ${sandContact ? 'vSandY = transformed.y;' : ''}
         vec4 triWp = vec4( transformed, 1.0 );
         vec3 triN = objectNormal;
@@ -158,7 +176,7 @@ export function applyTriplanarDetail(
         uniform float uTriContrast;
         uniform float uTriHue;
         uniform float uTriMacroA;
-        ${vertexAo ? 'uniform float uTriAo;\n        varying float vTriAo;' : ''}
+        ${vertexAo ? 'uniform float uTriAo;\n        varying float vTriAo;\n        varying vec2 vTriFacies;' : ''}
         ${sandContact ? 'uniform vec3 uSandC;\n        uniform vec2 uSandR;\n        varying float vSandY;' : ''}
         // roughness offset + layer mask weights, computed in color_fragment
         // and consumed by the roughness / normal includes further down
@@ -166,12 +184,19 @@ export function applyTriplanarDetail(
         float triGDune = 0.0;
         float triGGravel = 0.0;
         float triGPlateau = 0.0;
+        float triGMDune = 0.0;
+        float triGMGravel = 0.0;
+        float triGCrater = 0.0;
         ${
           layers
             ? `uniform sampler2D uTriDunes;
         uniform sampler2D uTriGravel;
         uniform sampler2D uTriMesa;
+        uniform sampler2D uTriDrift;
+        uniform sampler2D uTriRubble;
+        uniform sampler2D uTriCrater;
         uniform float uTriPlateauY;
+        uniform float uTriMaskDbg;
         // cheap value noise for world-space patch masks
         float triHash( vec2 p ) {
           return fract( sin( dot( p, vec2( 127.1, 311.7 ) ) ) * 43758.5453 );
@@ -242,15 +267,32 @@ export function applyTriplanarDetail(
           float triLGravel = smoothstep( 0.55, 0.7, triMGravel );
           triTop = mix( triTop, triLayered( uTriDunes, triUvTop ), triLDune );
           triTop = mix( triTop, triLayered( uTriGravel, triUvTop ), triLGravel );
-          // plateau tops: cracked slickrock with rock pools
+          // crater interiors: ash-dust layer filling the bowl up to the rim
+          // crest, where it blends back into the surrounding floor
+          float triCrater = ${vertexAo ? 'vTriFacies.y' : '0.0'};
+          triTop = mix( triTop, triLayered( uTriCrater, triUvTop ), triCrater );
+          // plateau tops: slickrock base with its own facies — dune sand
+          // pools in the dome hollows (baked morphology attribute), rubble
+          // patches from world-space noise
           float triPlateau = smoothstep( uTriPlateauY - 1.2, uTriPlateauY, vTriPos.y );
-          triTop = mix( triTop, triLayered( uTriMesa, triUvTop ), triPlateau );
-          // smoother dune sand + polished slickrock, gravel stays matte
-          triRoughM += ( triLDune * 0.18 + triPlateau * 0.28 - triLGravel * 0.12 ) * triW.y;
+          vec3 triMesa = triLayered( uTriMesa, triUvTop );
+          float triHollow = ${vertexAo ? 'clamp( vTriFacies.x * 1.4 - 0.15, 0.0, 1.0 )' : '0.0'};
+          float triMDuneTop =
+            triHollow * ( 0.45 + 0.55 * smoothstep( 0.35, 0.6, triMask( vTriPos.xz * 0.19 + 51.7 ) ) ) * 0.85;
+          float triMGravelTop = smoothstep( 0.58, 0.72, triMask( vTriPos.xz * 0.09 + 31.2 ) ) * 0.8;
+          triMesa = mix( triMesa, triLayered( uTriDrift, triUvTop ), triMDuneTop );
+          triMesa = mix( triMesa, triLayered( uTriRubble, triUvTop ), triMGravelTop );
+          triTop = mix( triTop, triMesa, triPlateau );
+          // smoother dune sand + polished slickrock, gravel/rubble matte
+          triRoughM += ( triLDune * 0.18 - triLGravel * 0.12 ) * triW.y;
+          triRoughM += triPlateau * ( 0.28 + triMDuneTop * 0.08 - triMGravelTop * 0.25 ) * triW.y;
           // hand the mask weights to the bump pass
           triGDune = triLDune;
           triGGravel = triLGravel;
-          triGPlateau = triPlateau;`
+          triGPlateau = triPlateau;
+          triGMDune = triMDuneTop;
+          triGMGravel = triMGravelTop;
+          triGCrater = triCrater;`
               : ''
           }
           vec3 triDet =
@@ -268,6 +310,23 @@ export function applyTriplanarDetail(
           diffuseColor.rgb *= mix( vec3( 1.0 ), triMul, uTriAmt );
           // bright detail (sun-worn dust, polished rock) reads smoother
           triRoughM += max( triLum - 0.5, 0.0 ) * 0.3;
+          ${
+            layers
+              ? `// debug: color-coded texture-mask regions (View > texture masks)
+          if ( uTriMaskDbg > 0.5 ) {
+            vec3 triDbg = vec3( 0.87, 0.78, 0.52 );                          // base sand: tan
+            triDbg = mix( triDbg, vec3( 0.95, 0.5, 0.1 ), triLDune );        // dunes: orange
+            triDbg = mix( triDbg, vec3( 0.45, 0.27, 0.1 ), triLGravel );     // gravel: brown
+            triDbg = mix( triDbg, vec3( 0.85, 0.2, 0.65 ), triCrater );      // crater: magenta
+            vec3 triDbgMesa = vec3( 0.55, 0.75, 0.92 );                      // slickrock: sky
+            triDbgMesa = mix( triDbgMesa, vec3( 0.15, 0.4, 0.95 ), triMDuneTop );   // drift: blue
+            triDbgMesa = mix( triDbgMesa, vec3( 0.15, 0.65, 0.3 ), triMGravelTop ); // rubble: green
+            triDbg = mix( triDbg, triDbgMesa, triPlateau );
+            triDbg = mix( vec3( 0.45 ), triDbg, triW.y );                    // steep faces: gray
+            diffuseColor.rgb = triDbg;
+          }`
+              : ''
+          }
         }`,
       )
       .replace(
@@ -288,9 +347,14 @@ export function applyTriplanarDetail(
           vec2 triGTop = triGradH( uTriTop, triUvTop );
           ${
             layers
-              ? `triGTop = mix( triGTop, triGradH( uTriDunes, triUvTop ), triGDune );
-          triGTop = mix( triGTop, triGradH( uTriGravel, triUvTop ), triGGravel );
-          triGTop = mix( triGTop, triGradH( uTriMesa, triUvTop ), triGPlateau );`
+              ? `vec2 triGrDune = triGradH( uTriDunes, triUvTop );
+          vec2 triGrGravel = triGradH( uTriGravel, triUvTop );
+          triGTop = mix( mix( triGTop, triGrDune, triGDune ), triGrGravel, triGGravel );
+          triGTop = mix( triGTop, triGradH( uTriCrater, triUvTop ), triGCrater );
+          vec2 triGrMesa = mix(
+            mix( triGradH( uTriMesa, triUvTop ), triGradH( uTriDrift, triUvTop ), triGMDune ),
+            triGradH( uTriRubble, triUvTop ), triGMGravel );
+          triGTop = mix( triGTop, triGrMesa, triGPlateau );`
               : ''
           }
           vec2 triDh = (

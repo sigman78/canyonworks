@@ -100,6 +100,10 @@ export function buildPanel(
     .add(render, 'wireframe')
     .name('wireframe')
     .onChange(() => cb.onRenderOptionChanged());
+  fView
+    .add(render, 'showTexMasks')
+    .name('texture masks')
+    .onChange(() => cb.onRenderOptionChanged());
   const fTweak = gui.addFolder('Render tweaks');
   fTweak.close();
   fTweak

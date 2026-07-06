@@ -126,6 +126,25 @@
       shader `sandContact` option for boulders/scree/rubble (object-space
       bottom skirt, scales per instance)
 
+## Done (v0.12 — mesa top variety)
+
+- [x] Per-mesa altitude offsets (flood-filled wall regions, quantized
+      steps: sunken / base / raised / towering)
+- [x] Mesa doming (rim-faded low-freq swell) + sand pockets in hollows
+- [x] Drainage channels across tops, continuous with flank gullies ->
+      rim notches; darkened channel lines
+- [x] Mesa-top texture facies: baked morphology attribute -> sand pools
+      in hollows, rubble patches over slickrock (bump/roughness follow
+      the same weights)
+- [x] Mesa-specific textures (drift.jpg / rubble.jpg via nano-banana2)
+      instead of reusing the floor dunes/gravel set
+- [x] Crater interior texture layer (crater.jpg, ash dust) blended up to
+      the rim via the facies.y crater weight
+- [x] Texture-mask debug overlay toggle (color-coded layer regions)
+- [ ] Remnant micro-landforms on tops (reuse pillar archetypes near rims)
+      — idea 4, deferred
+- [ ] Geometry potholes / rock pools on tops — idea 5, deferred
+
 ## Next
 
 - [ ] Decor edit brushes: place/erase boulders & pillars by hand; persist

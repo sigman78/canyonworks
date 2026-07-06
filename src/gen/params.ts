@@ -71,6 +71,16 @@ export interface RenderOptions {
   texAmount: number;
   /** detail texture world-space frequency */
   texScale: number;
+  /** normal perturbation strength derived from detail luminance */
+  texBump: number;
+  /** per-layer roughness variation (dune sheen, slickrock polish) */
+  texRough: number;
+  /** detail contrast around mid-gray (1 = as authored) */
+  texContrast: number;
+  /** texture hue bleed into the vertex palette (0 = pure luminance) */
+  texHue: number;
+  /** very-low-frequency macro tonal patchiness */
+  texMacro: number;
 }
 
 export type EditMode = 'view' | 'carve' | 'wall';
@@ -141,5 +151,10 @@ export function defaultRenderOptions(): RenderOptions {
     showDecor: true,
     texAmount: 0.75,
     texScale: 0.22,
+    texBump: 0.5,
+    texRough: 0.5,
+    texContrast: 1,
+    texHue: 0.3,
+    texMacro: 0.3,
   };
 }

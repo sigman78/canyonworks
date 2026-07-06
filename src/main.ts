@@ -40,6 +40,11 @@ class App {
     scale: { value: 0.22 },
     amount: { value: 0.75 },
     plateauY: { value: 3.2 },
+    bump: { value: 0.5 },
+    rough: { value: 0.5 },
+    contrast: { value: 1 },
+    hue: { value: 0.3 },
+    macro: { value: 0.3 },
   };
 
   private layout!: LayoutResult;
@@ -61,8 +66,7 @@ class App {
       metalness: 0,
       flatShading: this.render.flatShading,
     });
-    this.detailU.scale.value = this.render.texScale;
-    this.detailU.amount.value = this.render.texAmount;
+    this.syncDetailUniforms();
     applyTriplanarDetail(this.terrainMaterial, this.detailTex.cliff, this.detailTex.sand, this.detailU, {
       dunes: this.detailTex.dunes,
       gravel: this.detailTex.gravel,
@@ -217,9 +221,18 @@ class App {
       this.terrainMaterial.flatShading = this.render.flatShading;
       this.terrainMaterial.needsUpdate = true;
     }
+    this.syncDetailUniforms();
+    this.updateHud();
+  }
+
+  private syncDetailUniforms(): void {
     this.detailU.amount.value = this.render.texAmount;
     this.detailU.scale.value = this.render.texScale;
-    this.updateHud();
+    this.detailU.bump.value = this.render.texBump;
+    this.detailU.rough.value = this.render.texRough;
+    this.detailU.contrast.value = this.render.texContrast;
+    this.detailU.hue.value = this.render.texHue;
+    this.detailU.macro.value = this.render.texMacro;
   }
 
   private bindKeys(): void {

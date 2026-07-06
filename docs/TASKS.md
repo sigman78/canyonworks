@@ -89,10 +89,20 @@
 - [x] Plateau tops blend to cracked slickrock with rock pools above
       wallHeight*0.6
 
-## Next
+## Done (v0.9 — bump & sheen)
 
-- [ ] Normal/roughness variation from the detail textures (deeper shader
-      play — current pass is albedo detail only)
+- [x] Screen-space bump from the detail textures as height fields
+      (perturbNormalArb-style, no normal maps; per-projection gradients
+      via explicit-offset taps so sampling stays mip-filtered — dFdx of
+      a sampled value is quad-constant and pixelates)
+- [x] Per-layer roughness variation: dune sheen / slickrock polish /
+      matte gravel; bright detail reads smoother
+- [x] "Render tweaks" GUI folder: texture amt/scale, bump, sheen,
+      detail contrast, hue bleed, macro patches — all live uniforms
+- [x] Contrast reduced after feedback (bump 0.35 default, roughness
+      clamped to [0.5, 1])
+
+## Next
 
 - [ ] Decor edit brushes: place/erase boulders & pillars by hand; persist
       decor edits across regen (currently decor re-scatters every regen)

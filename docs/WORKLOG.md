@@ -1,5 +1,41 @@
 # Worklog
 
+## 2026-07-05 — v0.9: bump & sheen from the detail textures + render tweaks
+
+Goal: normal/roughness variation without authoring normal maps. Mid-pass
+feedback: first tuning was way too contrasty — reduced, and the shader
+knobs got exposed as a "Render tweaks" GUI folder.
+
+- Screen-space bump: the detail textures double as height fields; a
+  per-projection height gradient perturbs the shading normal with the
+  same math as three's bumpmap `perturbNormalArb`. Works through the
+  tri-planar blend and instancing for free — mesa crack plates, dune
+  ripples and cliff strata all pick up relief.
+- Pixelation fix (feedback: "some sort of filtering missing on sampling
+  bump", scale-independent): the first version took `dFdx/dFdy` of the
+  *already-sampled* luminance — GPU derivatives are constant per 2x2
+  pixel quad, so the bump normal was quad-blocky salt-and-pepper. Now the
+  gradient is built like three's `dHdxy_fwd`: the height is re-sampled at
+  `uv + dFdx(uv)` / `uv + dFdy(uv)`, so every tap goes through the
+  regular mip/aniso filtering — per-pixel gradients, and bump fades
+  naturally with minification. Gradients are taken per projection
+  (side/top, layer textures blended by the same patch masks) and blended
+  by the tri-planar weights. With the grit gone, default strength went
+  0.35 -> 0.5.
+- Roughness variation (base material stays roughness 1): bright detail
+  reads smoother, dune patches get a slight sheen, plateau slickrock a
+  polish, gravel stays matte (per-layer offsets ride the existing masks).
+  Clamped to [0.5, 1] after the too-contrasty first pass.
+- "Render tweaks" folder (all live uniforms, no recompile): texture amt /
+  scale (moved from View), bump, sheen, detail contrast (around mid-gray),
+  hue bleed (was hardcoded 0.3), macro patches (was hardcoded 0.3).
+- Pipeline note: three's fragment order is color -> roughness -> normal,
+  so the height/roughness offsets are stashed in globals in
+  `color_fragment` and consumed by the later includes.
+
+Screenshots: `docs/shots/v0.9-bump-sheen.jpg`,
+`docs/shots/v0.9-bump-sheen-close.jpg`.
+
 ## 2026-07-05 — v0.8: layered floor & mesa detail
 
 Feedback: floors need more variation (sandy patches / rocky patches / mini

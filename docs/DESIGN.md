@@ -138,9 +138,22 @@ game. Decor placement export (positions/types) is a TODO.
   texture — plateau tops read as cracked slickrock plates with dark rock
   pools instead of bare cap color.
 - **Palette-preserving blend**: detail is applied as a mostly-luminance
-  multiplier (25% hue bleed) over the vertex colors, so the hand-tuned
-  Sedona palette — mesa caps, crater bands, fissure slots, crevice shade —
-  survives texturing. `texture amt` 0 returns to pure vertex color.
+  multiplier (hue bleed slider, default 0.3) over the vertex colors, so
+  the hand-tuned Sedona palette — mesa caps, crater bands, fissure slots,
+  crevice shade — survives texturing. `texture amt` 0 returns to pure
+  vertex color.
+- **Bump & sheen (v0.9)**: the detail textures double as height fields —
+  per-projection height gradients perturb the shading normal
+  (perturbNormalArb math, no normal maps). Gradients use explicit-offset
+  taps (`uv + dFdx(uv)`, like three's dHdxy_fwd) so every sample is
+  mip/aniso filtered — NOT `dFdx` of a sampled value, which is constant
+  per 2x2 pixel quad and reads as pixelation. Roughness variation rides
+  the detail luminance and layer masks: bright detail / dune patches /
+  plateau slickrock read smoother, gravel stays matte (clamped to
+  [0.5, 1] — subtle by design).
+- **Render tweaks folder**: texture amt/scale, bump, sheen, detail
+  contrast, hue bleed, macro patches — shared live uniforms across the
+  terrain and decor materials, no shader recompile.
 
 ## Palette (current)
 

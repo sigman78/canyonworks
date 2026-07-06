@@ -96,13 +96,35 @@ export function buildPanel(
     .add(render, 'flatShading')
     .name('flat shading')
     .onChange(() => cb.onRenderOptionChanged());
-  fView
+  const fTweak = gui.addFolder('Render tweaks');
+  fTweak.close();
+  fTweak
     .add(render, 'texAmount', 0, 1, 0.05)
     .name('texture amt')
     .onChange(() => cb.onRenderOptionChanged());
-  fView
+  fTweak
     .add(render, 'texScale', 0.05, 0.8, 0.01)
     .name('texture scale')
+    .onChange(() => cb.onRenderOptionChanged());
+  fTweak
+    .add(render, 'texBump', 0, 1.5, 0.05)
+    .name('bump')
+    .onChange(() => cb.onRenderOptionChanged());
+  fTweak
+    .add(render, 'texRough', 0, 1, 0.05)
+    .name('sheen')
+    .onChange(() => cb.onRenderOptionChanged());
+  fTweak
+    .add(render, 'texContrast', 0.3, 1.5, 0.05)
+    .name('detail contrast')
+    .onChange(() => cb.onRenderOptionChanged());
+  fTweak
+    .add(render, 'texHue', 0, 1, 0.05)
+    .name('hue bleed')
+    .onChange(() => cb.onRenderOptionChanged());
+  fTweak
+    .add(render, 'texMacro', 0, 1, 0.05)
+    .name('macro patches')
     .onChange(() => cb.onRenderOptionChanged());
 
   const actions = {

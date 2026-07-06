@@ -114,6 +114,18 @@
 - [x] Sun azimuth / elevation / shadow strength sliders (live)
 - [x] Wireframe toggle (terrain + decor) for mesh showcase
 
+## Done (v0.11 — pillar variety & ground contact)
+
+- [x] Pillar archetypes: hoodoo / spire / totem / butte, per-style
+      height & radius ranges, cap-chance instead of always-cap
+- [x] Progressive lean (clamped so the top stays in the hex)
+- [x] Tweaks on feedback: taller spires (40% whole-body tilt), wider
+      squat buttes with dark slanted caprock slabs, balancing caps
+      x1.3 (x2 was overkill)
+- [x] Sand ground-contact blend: baked into pillar shaft vertex colors;
+      shader `sandContact` option for boulders/scree/rubble (object-space
+      bottom skirt, scales per instance)
+
 ## Next
 
 - [ ] Decor edit brushes: place/erase boulders & pillars by hand; persist

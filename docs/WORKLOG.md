@@ -1,5 +1,49 @@
 # Worklog
 
+## 2026-07-05 — v0.11: pillar variety + sand ground-contact blend
+
+Goal: pillar variation (height, profile, lean, cap or no cap) and a way
+to blend the sandy floor color into pillar/boulder bottoms at ground
+contact.
+
+- **Four pillar archetypes** (`PillarStyle` in decor.ts, weighted pick):
+  - *hoodoo* — the classic: flared foot, eroded waist, narrow neck,
+    balancing cap stone (85% of the time now, not always)
+  - *spire* — tall (up to 1.35x wall height after feedback) strongly
+    tapered needle, no cap; 40% get a pronounced whole-body tilt
+  - *totem* — blocky stacked bands (stronger band amplitude + per-band
+    radius jumps from a hash), capped 45% of the time
+  - *butte* — squat and wide with a pale flat top under a **dark slanted
+    caprock slab** (overhanging ~1.2x the shaft radius)
+  Each has its own height/radius ranges; footprints stay hex-contained
+  (tilted spires may overhang visually — decorative only).
+- **Lean**: progressive centerline drift (offset grows with height,
+  direction random); top offset clamped to ~0.9·r0. Cap stone follows
+  the drift. Tilted spires rotate the whole group on top of it.
+- **Balancing cap stones enlarged ~1.3x** (1.3–1.9·r0, was 1.0–1.45) —
+  hoodoos read as balanced-rock formations; a first 2x pass was overkill
+  (cartoon mushrooms) and got pulled back on feedback.
+- Shaft cylinders are now closed (profile math multiplies the original
+  coords instead of rebuilding from the angle, so cap-disk vertices
+  survive) — capless tops don't show a hole.
+- **Sand contact blend**:
+  - pillar shafts: baked into vertex colors (sand lerp over the bottom
+    ~0.65 wu)
+  - boulders / scree / pillar rubble: new `sandContact` option in
+    `applyTriplanarDetail` — blends a sand tint over the object-space
+    bottom of each instance (rocks are buried ~0.25·scale, so the range
+    [0.1, 0.6] local starts just above the ground line; first attempt
+    used [-0.55, 0.05], which is entirely underground -> invisible).
+    Detail texture still multiplies over the tint so grain carries.
+  - scree no longer tumbles fully around X (rest pose ±0.35 rad) so the
+    sand skirt stays down.
+- `applyTriplanarDetail` positional flags refactored into a
+  `DetailOptions` object ({layers, vertexAo, sandContact}).
+
+Screenshots: `docs/shots/v0.11-pillar-variety.jpg`,
+`docs/shots/v0.11-pillars-wide.jpg`, `docs/shots/v0.11-buttes.jpg`
+(all-butte debug roll showing the dark caprock slabs).
+
 ## 2026-07-05 — v0.10: light pass — baked AO, terrain self-shadowing, sun controls
 
 Goal: tweakable AO + self-shadowing for the terrain; larger boulders

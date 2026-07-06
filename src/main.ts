@@ -68,14 +68,10 @@ class App {
       flatShading: this.render.flatShading,
     });
     this.syncDetailUniforms();
-    applyTriplanarDetail(
-      this.terrainMaterial,
-      this.detailTex.cliff,
-      this.detailTex.sand,
-      this.detailU,
-      { dunes: this.detailTex.dunes, gravel: this.detailTex.gravel, mesa: this.detailTex.mesa },
-      true, // terrain mesh carries the baked ao attribute
-    );
+    applyTriplanarDetail(this.terrainMaterial, this.detailTex.cliff, this.detailTex.sand, this.detailU, {
+      layers: { dunes: this.detailTex.dunes, gravel: this.detailTex.gravel, mesa: this.detailTex.mesa },
+      vertexAo: true, // terrain mesh carries the baked ao attribute
+    });
 
     this.editor = new BrushEditor(this.grid, this.viewer, {
       onQuickUpdate: () => this.quickUpdate(),

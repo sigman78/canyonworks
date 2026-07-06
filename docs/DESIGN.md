@@ -61,8 +61,11 @@ surface nets        one vertex per sign-crossing cell, quads across sign-
 decor modifiers     non-SDF instanced features (decor.ts):
                     - boulders: perturbed icosahedra, wall-base biased,
                       big ones mark their hex blocked
-                    - lone pillars: strata-colored noisy cylinders in openings,
-                      hex blocked
+                    - lone pillars: four archetypes (hoodoo / spire /
+                      totem / butte) with per-style profile, lean and
+                      cap-chance; hex blocked
+                    - ground contact: sand tint blended into decor
+                      bottoms (baked for shafts, shader skirt for rocks)
                     - scree fans: small instanced rocks sliding from wall bases
                       along +grad(SDF), decorative (passable)
                     - craters are heightmap-baked (passable), tinted

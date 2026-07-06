@@ -20,6 +20,8 @@ export interface DecorDetail {
 }
 
 const ROCK_TONES = [0xa8542c, 0x96482a, 0xb56336, 0x8a4224, 0xc07444];
+/** canyon-floor sand tone blended into decor at ground contact */
+const SAND_CONTACT = new THREE.Color(0xcf8e52);
 
 export function buildDecor(
   grid: HexGrid,
@@ -37,12 +39,19 @@ export function buildDecor(
   const pillars = raisePillars(grid, fields, params, noise, rng, group, blocked);
   const scree = spreadScree(grid, fields, params, noise, rng, group);
 
-  // rock detail texture on every decor material (instanced meshes included)
+  // rock detail texture on every decor material (instanced meshes included);
+  // ground-contact materials additionally blend a sand skirt at the bottom
   if (detail) {
     group.traverse((o) => {
       const mat = (o as THREE.Mesh).material;
       if (mat instanceof THREE.MeshStandardMaterial) {
-        applyTriplanarDetail(mat, detail.rock, detail.rock, detail.uniforms);
+        // decor rocks are buried ~0.25 of their scale, so the ground line
+        // sits around local y +0.3 — the skirt range starts just above it
+        applyTriplanarDetail(mat, detail.rock, detail.rock, detail.uniforms, {
+          sandContact: mat.userData.sandContact
+            ? { color: SAND_CONTACT, range: [0.1, 0.6] }
+            : undefined,
+        });
       }
     });
   }
@@ -67,11 +76,14 @@ function makeRockGeometry(noise: NoiseKit, seed: number, spikiness: number): THR
 }
 
 function rockMaterial(): THREE.MeshStandardMaterial {
-  return new THREE.MeshStandardMaterial({
+  const mat = new THREE.MeshStandardMaterial({
     roughness: 1,
     metalness: 0,
     flatShading: true,
   });
+  // rocks made with this material rest on the ground -> sand skirt
+  mat.userData.sandContact = true;
+  return mat;
 }
 
 // ---- boulders -------------------------------------------------------------
@@ -191,11 +203,20 @@ function raisePillars(
     }
     if (!ok) continue;
 
-    // strong height variation: stumps to near-wall-height hoodoos
-    const height = randRange(rng, 0.35, 0.95) * params.wallHeight;
+    // pick an archetype, then height/radius ranges per style
+    const style = pickPillarStyle(rng);
+    const dims: Record<PillarStyle, [number, number, number, number]> = {
+      // [minH, maxH (x wallHeight), minR, maxR (x hex size)]
+      hoodoo: [0.35, 0.95, 0.36, 0.48],
+      spire: [0.7, 1.35, 0.28, 0.4],
+      totem: [0.4, 0.9, 0.34, 0.46],
+      butte: [0.16, 0.36, 0.55, 0.68],
+    };
+    const [h0, h1, rr0, rr1] = dims[style];
+    const height = randRange(rng, h0, h1) * params.wallHeight;
     // keep the widest flare/noise bulge inside the hex (inradius ≈ 0.866·size)
-    const r0 = randRange(rng, 0.36, 0.48) * grid.size;
-    const pillar = makePillar(noise, rng, r0, height, params.terraceStep);
+    const r0 = randRange(rng, rr0, rr1) * grid.size;
+    const pillar = makePillar(noise, rng, r0, height, params.terraceStep, style);
     const y = fields.sampleGround(x, z) - 0.15;
     pillar.position.set(x, y, z);
     pillar.rotation.y = rng() * Math.PI * 2;
@@ -208,10 +229,30 @@ function raisePillars(
   return count;
 }
 
+type PillarStyle = 'hoodoo' | 'spire' | 'totem' | 'butte';
+
+function pickPillarStyle(rng: Rng): PillarStyle {
+  const r = rng();
+  if (r < 0.38) return 'hoodoo';
+  if (r < 0.6) return 'spire';
+  if (r < 0.84) return 'totem';
+  return 'butte';
+}
+
+/** deterministic per-band hash for the totem's blocky radius jumps */
+function bandHash(band: number, seed: number): number {
+  const s = Math.sin(band * 12.9898 + seed * 78.233) * 43758.5453;
+  return s - Math.floor(s);
+}
+
 /**
- * Hoodoo-style pillar: flared footing with rubble, eroded waist, subtle
- * strata ledges, a narrow neck and a wider balanced cap stone on top.
- * r0 is the nominal shaft radius; total footprint stays inside one hex.
+ * Lone pillar in one of four archetypes, footprint contained in one hex:
+ * - hoodoo: flared footing, eroded waist, narrow neck, big balancing cap
+ * - spire: tall strongly tapered point, no cap; some tilt whole-body
+ * - totem: blocky stacked bands with per-band radius jumps, sometimes capped
+ * - butte: wide flat-top with a dark slanted caprock slab
+ * All lean by a progressive centerline drift (top offset clamped to the
+ * hex) and blend the floor sand color into the bottom of the shaft.
  */
 function makePillar(
   noise: NoiseKit,
@@ -219,40 +260,66 @@ function makePillar(
   r0: number,
   height: number,
   strataStep: number,
+  style: PillarStyle,
 ): THREE.Group {
   const g = new THREE.Group();
   const seed = rng() * 100;
-  const waistDepth = randRange(rng, 0.1, 0.24);
-  const neckDepth = randRange(rng, 0.28, 0.45);
+  const waistDepth = style === 'hoodoo' ? randRange(rng, 0.1, 0.24) : randRange(rng, 0, 0.08);
+  const neckDepth = style === 'hoodoo' ? randRange(rng, 0.28, 0.45) : 0;
+  const taperTop =
+    style === 'spire' ? randRange(rng, 0.05, 0.16)
+    : style === 'totem' ? randRange(rng, 0.7, 0.85)
+    : style === 'butte' ? randRange(rng, 0.8, 0.92)
+    : 1;
+  const bandAmp = style === 'totem' ? 0.13 : style === 'spire' ? 0.03 : style === 'butte' ? 0.08 : 0.06;
   const bandPhase = rng() * Math.PI * 2;
-  const bandStep = Math.max(0.3, strataStep * 0.55);
+  const bandStep = Math.max(0.3, strataStep * (style === 'totem' ? 0.85 : 0.55));
+  // progressive lean: centerline drifts sideways with height; the top
+  // offset is clamped so the silhouette stays inside the hex
+  const maxLean = style === 'spire' ? 0.12 : 0.07;
+  const leanT = Math.min(rng() * maxLean, (r0 * 0.9) / height);
+  const leanA = rng() * Math.PI * 2;
+  const lx = Math.cos(leanA) * leanT;
+  const lz = Math.sin(leanA) * leanT;
 
-  // ---- shaft (open-ended; the cap stone covers the top) ----
-  const radialSegs = 10;
+  // ---- shaft (closed ends: spires/buttes/capless hoodoos show their top) ----
+  const radialSegs = style === 'butte' ? 12 : 10;
   const heightSegs = Math.max(8, Math.round(height / 0.3));
-  const geo = new THREE.CylinderGeometry(1, 1, 1, radialSegs, heightSegs, true);
+  const geo = new THREE.CylinderGeometry(1, 1, 1, radialSegs, heightSegs, false);
   geo.translate(0, 0.5, 0); // y in 0..1 along shaft
   const pos = geo.getAttribute('position') as THREE.BufferAttribute;
   const colors = new Float32Array(pos.count * 3);
   const tone = new THREE.Color();
   const strata = [0xa04a24, 0xbe5c2c, 0xcf7038, 0xda8748];
+  const capTonePale = new THREE.Color(0xedc79a);
 
   for (let i = 0; i < pos.count; i++) {
     const t = pos.getY(i); // 0 bottom .. 1 top
     const a = Math.atan2(pos.getZ(i), pos.getX(i));
     const wy = t * height;
 
-    const footing = 0.5 * Math.exp(-t * 6); // flared base
+    const footing = (style === 'butte' ? 0.35 : 0.5) * Math.exp(-t * 6); // flared base
     const waist = 1 - waistDepth * Math.sin(Math.PI * Math.min(Math.max((t - 0.08) / 0.9, 0), 1));
-    const neck = 1 - neckDepth * smoothstep(0.72, 0.98, t);
-    const bands = 1 + 0.06 * Math.sin((wy / bandStep) * Math.PI + bandPhase); // strata ledges
+    const neck = neckDepth > 0 ? 1 - neckDepth * smoothstep(0.72, 0.98, t) : 1;
+    const taper = 1 - (1 - taperTop) * Math.pow(t, style === 'spire' ? 1.15 : 1.6);
+    let bands = 1 + bandAmp * Math.sin((wy / bandStep) * Math.PI + bandPhase); // strata ledges
+    if (style === 'totem') {
+      // blocky per-band radius jumps -> stacked-stones read
+      bands *= 0.92 + 0.16 * bandHash(Math.floor(wy / bandStep), seed);
+    }
     const n = fbm3(noise.n3, Math.cos(a) * 1.6 + seed, wy * 0.7, Math.sin(a) * 1.6 - seed, 3);
-    const r = r0 * (0.85 + footing) * waist * neck * bands * (1 + n * 0.18);
-    pos.setXYZ(i, Math.cos(a) * r, wy, Math.sin(a) * r);
+    const rMul = (0.85 + footing) * waist * neck * taper * bands * (1 + n * 0.18);
+    // multiply original coords (cap-disk verts keep their radial ratio,
+    // center verts stay centered) + progressive lean drift
+    pos.setXYZ(i, pos.getX(i) * r0 * rMul + lx * wy, wy, pos.getZ(i) * r0 * rMul + lz * wy);
 
     const band = Math.floor(wy / bandStep);
     tone.setHex(strata[((band % strata.length) + strata.length) % strata.length]);
     tone.multiplyScalar(0.9 + n * 0.12);
+    // butte tops read as pale mesa slickrock
+    if (style === 'butte') tone.lerp(capTonePale, smoothstep(0.88, 0.99, t) * 0.85);
+    // floor sand blended into the ground-contact zone
+    tone.lerp(SAND_CONTACT, (1 - smoothstep(0.1, 0.65, wy)) * 0.8);
     colors[i * 3] = tone.r;
     colors[i * 3 + 1] = tone.g;
     colors[i * 3 + 2] = tone.b;
@@ -270,18 +337,50 @@ function makePillar(
   );
   g.add(shaft);
 
-  // ---- balancing cap stone: wider than the neck, offset + tilted ----
-  const capR = r0 * randRange(rng, 1.0, 1.45);
-  const capGeo = makeRockGeometry(noise, seed + 11.3, 0.3);
-  const capTone = new THREE.Color(0x8a4224).multiplyScalar(randRange(rng, 0.9, 1.08));
-  const cap = new THREE.Mesh(
-    capGeo,
-    new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0, flatShading: true, color: capTone }),
-  );
-  cap.scale.set(capR, capR * randRange(rng, 0.45, 0.62), capR);
-  cap.position.set((rng() - 0.5) * 0.6 * r0, height + capR * 0.16, (rng() - 0.5) * 0.6 * r0);
-  cap.rotation.set((rng() - 0.5) * 0.45, rng() * Math.PI * 2, (rng() - 0.5) * 0.45);
-  g.add(cap);
+  // ---- angled spires: a share of them get a pronounced whole-body tilt ----
+  if (style === 'spire' && rng() < 0.4) {
+    const tilt = randRange(rng, 0.1, 0.2);
+    const ta = rng() * Math.PI * 2;
+    g.rotation.x = Math.cos(ta) * tilt;
+    g.rotation.z = Math.sin(ta) * tilt;
+  }
+
+  // ---- butte caprock: dark slanted slab overhanging the flat top ----
+  if (style === 'butte') {
+    const capR = r0 * randRange(rng, 1.15, 1.3);
+    const capGeo = makeRockGeometry(noise, seed + 5.7, 0.22);
+    const capTone = new THREE.Color(0x54301c).multiplyScalar(randRange(rng, 0.85, 1.1));
+    const slab = new THREE.Mesh(
+      capGeo,
+      new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0, flatShading: true, color: capTone }),
+    );
+    slab.scale.set(capR, capR * randRange(rng, 0.16, 0.24), capR);
+    slab.position.set(lx * height, height + capR * 0.04, lz * height);
+    const slant = randRange(rng, 0.12, 0.22);
+    const sa = rng() * Math.PI * 2;
+    slab.rotation.set(Math.cos(sa) * slant, rng() * Math.PI * 2, Math.sin(sa) * slant);
+    g.add(slab);
+  }
+
+  // ---- balancing cap stone: hoodoos usually, totems sometimes ----
+  const capChance = style === 'hoodoo' ? 0.85 : style === 'totem' ? 0.45 : 0;
+  if (rng() < capChance) {
+    const capR = r0 * randRange(rng, 1.3, 1.9);
+    const capGeo = makeRockGeometry(noise, seed + 11.3, 0.3);
+    const capTone = new THREE.Color(0x8a4224).multiplyScalar(randRange(rng, 0.9, 1.08));
+    const cap = new THREE.Mesh(
+      capGeo,
+      new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0, flatShading: true, color: capTone }),
+    );
+    cap.scale.set(capR, capR * randRange(rng, 0.45, 0.62), capR);
+    cap.position.set(
+      lx * height + (rng() - 0.5) * 0.6 * r0,
+      height + capR * 0.16,
+      lz * height + (rng() - 0.5) * 0.6 * r0,
+    );
+    cap.rotation.set((rng() - 0.5) * 0.45, rng() * Math.PI * 2, (rng() - 0.5) * 0.45);
+    g.add(cap);
+  }
 
   // ---- footing rubble ----
   const rubbleGeo = makeRockGeometry(noise, seed + 27.9, 0.45);
@@ -290,11 +389,9 @@ function makePillar(
     const a = rng() * Math.PI * 2;
     const d = r0 * randRange(rng, 1.25, 1.6);
     const s = randRange(rng, 0.1, 0.22);
-    const rubbleTone = new THREE.Color(ROCK_TONES[Math.floor(rng() * ROCK_TONES.length)]);
-    const rock = new THREE.Mesh(
-      rubbleGeo,
-      new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0, flatShading: true, color: rubbleTone }),
-    );
+    const rubbleMat = rockMaterial();
+    rubbleMat.color.setHex(ROCK_TONES[Math.floor(rng() * ROCK_TONES.length)]);
+    const rock = new THREE.Mesh(rubbleGeo, rubbleMat);
     rock.scale.set(s, s * 0.75, s);
     rock.position.set(Math.cos(a) * d, s * 0.3, Math.sin(a) * d);
     rock.rotation.y = rng() * Math.PI * 2;
@@ -359,7 +456,8 @@ function spreadScree(
       if (fields.sampleCrack(sx, sz) < 1.1) continue; // don't float over slots
       const s = params.screeSize * randRange(rng, 0.5, 1.4) * (1.15 - along / (spread + 0.5) * 0.5);
       const y = fields.sampleGround(sx, sz) - s * 0.2;
-      e.set(rng() * Math.PI, rng() * Math.PI * 2, 0);
+      // rest naturally (no full tumble) so the sand-contact skirt stays down
+      e.set((rng() - 0.5) * 0.7, rng() * Math.PI * 2, (rng() - 0.5) * 0.7);
       q.setFromEuler(e);
       m.compose(new THREE.Vector3(sx, y, sz), q, new THREE.Vector3(s, s * 0.75, s));
       mesh.setMatrixAt(count, m);

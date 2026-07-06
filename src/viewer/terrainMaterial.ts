@@ -47,6 +47,19 @@ export interface DetailLayers {
   mesa: THREE.Texture;
 }
 
+export interface DetailOptions {
+  /** multi-layer top projection (dunes/gravel patches + mesa plateau) */
+  layers?: DetailLayers;
+  /** consume a baked per-vertex `ao` attribute (terrain mesh only) */
+  vertexAo?: boolean;
+  /**
+   * blend a sand tint over the object-space bottom of the mesh (ground
+   * contact for decor rocks); range is [full-sand y, no-sand y] in local
+   * units, so it scales with the instance
+   */
+  sandContact?: { color: THREE.Color; range: [number, number] };
+}
+
 export function loadDetailTextures(): DetailTextures {
   const loader = new THREE.TextureLoader();
   const load = (url: string): THREE.Texture => {
@@ -81,10 +94,9 @@ export function applyTriplanarDetail(
   side: THREE.Texture,
   top: THREE.Texture,
   u: DetailUniforms,
-  layers?: DetailLayers,
-  /** consume a baked per-vertex `ao` attribute (terrain mesh only) */
-  vertexAo = false,
+  opts: DetailOptions = {},
 ): void {
+  const { layers, vertexAo, sandContact } = opts;
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.uTriSide = { value: side };
     shader.uniforms.uTriTop = { value: top };
@@ -96,6 +108,10 @@ export function applyTriplanarDetail(
     shader.uniforms.uTriHue = u.hue;
     shader.uniforms.uTriMacroA = u.macro;
     if (vertexAo) shader.uniforms.uTriAo = u.ao;
+    if (sandContact) {
+      shader.uniforms.uSandC = { value: sandContact.color };
+      shader.uniforms.uSandR = { value: new THREE.Vector2(...sandContact.range) };
+    }
     if (layers) {
       shader.uniforms.uTriDunes = { value: layers.dunes };
       shader.uniforms.uTriGravel = { value: layers.gravel };
@@ -109,12 +125,14 @@ export function applyTriplanarDetail(
         `#include <common>
         varying vec3 vTriPos;
         varying vec3 vTriNormal;
-        ${vertexAo ? 'attribute float ao;\n        varying float vTriAo;' : ''}`,
+        ${vertexAo ? 'attribute float ao;\n        varying float vTriAo;' : ''}
+        ${sandContact ? 'varying float vSandY;' : ''}`,
       )
       .replace(
         '#include <fog_vertex>',
         `#include <fog_vertex>
         ${vertexAo ? 'vTriAo = ao;' : ''}
+        ${sandContact ? 'vSandY = transformed.y;' : ''}
         vec4 triWp = vec4( transformed, 1.0 );
         vec3 triN = objectNormal;
         #ifdef USE_INSTANCING
@@ -141,6 +159,7 @@ export function applyTriplanarDetail(
         uniform float uTriHue;
         uniform float uTriMacroA;
         ${vertexAo ? 'uniform float uTriAo;\n        varying float vTriAo;' : ''}
+        ${sandContact ? 'uniform vec3 uSandC;\n        uniform vec2 uSandR;\n        varying float vSandY;' : ''}
         // roughness offset + layer mask weights, computed in color_fragment
         // and consumed by the roughness / normal includes further down
         float triRoughM = 0.0;
@@ -202,6 +221,14 @@ export function applyTriplanarDetail(
         '#include <color_fragment>',
         `#include <color_fragment>
         {
+          ${
+            sandContact
+              ? `// sand skirt where the rock meets the ground; the detail
+          // texture still multiplies over it so grain carries across
+          float sandF = 1.0 - smoothstep( uSandR.x, uSandR.y, vSandY );
+          diffuseColor.rgb = mix( diffuseColor.rgb, uSandC, sandF * 0.85 );`
+              : ''
+          }
           vec3 triW = pow( abs( normalize( vTriNormal ) ), vec3( 4.0 ) );
           triW /= ( triW.x + triW.y + triW.z );
           vec2 triUvTop = vTriPos.xz * uTriScale;
@@ -297,5 +324,7 @@ export function applyTriplanarDetail(
   };
   // uniforms differ per material but the program is shared per variant
   mat.customProgramCacheKey = () =>
-    (layers ? 'triplanar-layers' : 'triplanar') + (vertexAo ? '-ao' : '');
+    (layers ? 'triplanar-layers' : 'triplanar') +
+    (vertexAo ? '-ao' : '') +
+    (sandContact ? '-sand' : '');
 }

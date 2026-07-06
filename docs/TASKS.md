@@ -102,6 +102,18 @@
 - [x] Contrast reduced after feedback (bump 0.35 default, roughness
       clamped to [0.5, 1])
 
+## Done (v0.10 — light pass)
+
+- [x] Baked per-vertex AO from the density volume (12-ray surface-hugging
+      fan, 4 steps to 4 wu, `ao` attribute + live `AO amount` uniform with
+      pow-2.2 contrast — no rebake; v2 after "barely noticeable" feedback:
+      a strongly normal-biased fan escapes upward and bakes ~1 everywhere)
+- [x] Terrain self-shadowing that actually reads: default sun lowered
+      65° -> 45°, shadow map 4096, normalBias 0.2 (boulder contact
+      shadows visible, no acne)
+- [x] Sun azimuth / elevation / shadow strength sliders (live)
+- [x] Wireframe toggle (terrain + decor) for mesh showcase
+
 ## Next
 
 - [ ] Decor edit brushes: place/erase boulders & pillars by hand; persist

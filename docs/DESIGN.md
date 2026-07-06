@@ -152,8 +152,19 @@ game. Decor placement export (positions/types) is a TODO.
   plateau slickrock read smoother, gravel stays matte (clamped to
   [0.5, 1] — subtle by design).
 - **Render tweaks folder**: texture amt/scale, bump, sheen, detail
-  contrast, hue bleed, macro patches — shared live uniforms across the
-  terrain and decor materials, no shader recompile.
+  contrast, hue bleed, macro patches, AO amount, sun azimuth/elevation,
+  shadow strength — shared live uniforms / light-rig params, no shader
+  recompile and no regen.
+- **Baked AO (v0.10)**: per-vertex ambient occlusion ray-marched through
+  the density volume at meshing time (12 rays bent only 0.6 toward the
+  normal so they hug the surface and hit nearby walls; 4 steps out to
+  4 wu for canyon-scale enclosure) into an `ao` attribute. Applied with
+  a pow-2.2 contrast curve — fully to indirect light, 45% to direct — so
+  crevices deepen without flattening the sun side.
+- **Sun & shadows (v0.10)**: directional sun on a spherical mount
+  (azimuth/elevation sliders, radius fitted to the map), default 45°
+  elevation for readable self-shadowing; 4096 shadow map,
+  normalBias 0.2; `shadow strength` maps to `light.shadow.intensity`.
 
 ## Palette (current)
 

@@ -96,6 +96,10 @@ export function buildPanel(
     .add(render, 'flatShading')
     .name('flat shading')
     .onChange(() => cb.onRenderOptionChanged());
+  fView
+    .add(render, 'wireframe')
+    .name('wireframe')
+    .onChange(() => cb.onRenderOptionChanged());
   const fTweak = gui.addFolder('Render tweaks');
   fTweak.close();
   fTweak
@@ -125,6 +129,22 @@ export function buildPanel(
   fTweak
     .add(render, 'texMacro', 0, 1, 0.05)
     .name('macro patches')
+    .onChange(() => cb.onRenderOptionChanged());
+  fTweak
+    .add(render, 'aoAmount', 0, 1, 0.05)
+    .name('AO amount')
+    .onChange(() => cb.onRenderOptionChanged());
+  fTweak
+    .add(render, 'sunAzimuth', -180, 180, 1)
+    .name('sun azimuth')
+    .onChange(() => cb.onRenderOptionChanged());
+  fTweak
+    .add(render, 'sunElevation', 15, 85, 1)
+    .name('sun elevation')
+    .onChange(() => cb.onRenderOptionChanged());
+  fTweak
+    .add(render, 'shadowStrength', 0, 1, 0.05)
+    .name('shadow strength')
     .onChange(() => cb.onRenderOptionChanged());
 
   const actions = {

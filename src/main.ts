@@ -45,6 +45,7 @@ class App {
     contrast: { value: 1 },
     hue: { value: 0.3 },
     macro: { value: 0.3 },
+    ao: { value: 0.65 },
   };
 
   private layout!: LayoutResult;
@@ -67,11 +68,14 @@ class App {
       flatShading: this.render.flatShading,
     });
     this.syncDetailUniforms();
-    applyTriplanarDetail(this.terrainMaterial, this.detailTex.cliff, this.detailTex.sand, this.detailU, {
-      dunes: this.detailTex.dunes,
-      gravel: this.detailTex.gravel,
-      mesa: this.detailTex.mesa,
-    });
+    applyTriplanarDetail(
+      this.terrainMaterial,
+      this.detailTex.cliff,
+      this.detailTex.sand,
+      this.detailU,
+      { dunes: this.detailTex.dunes, gravel: this.detailTex.gravel, mesa: this.detailTex.mesa },
+      true, // terrain mesh carries the baked ao attribute
+    );
 
     this.editor = new BrushEditor(this.grid, this.viewer, {
       onQuickUpdate: () => this.quickUpdate(),
@@ -221,6 +225,11 @@ class App {
       this.terrainMaterial.flatShading = this.render.flatShading;
       this.terrainMaterial.needsUpdate = true;
     }
+    this.terrainMaterial.wireframe = this.render.wireframe;
+    this.decorGroup?.traverse((o) => {
+      const m = (o as THREE.Mesh).material as THREE.MeshStandardMaterial | undefined;
+      if (m?.isMeshStandardMaterial) m.wireframe = this.render.wireframe;
+    });
     this.syncDetailUniforms();
     this.updateHud();
   }
@@ -233,6 +242,9 @@ class App {
     this.detailU.contrast.value = this.render.texContrast;
     this.detailU.hue.value = this.render.texHue;
     this.detailU.macro.value = this.render.texMacro;
+    this.detailU.ao.value = this.render.aoAmount;
+    this.viewer.setSun(this.render.sunAzimuth, this.render.sunElevation);
+    this.viewer.sun.shadow.intensity = this.render.shadowStrength;
   }
 
   private bindKeys(): void {

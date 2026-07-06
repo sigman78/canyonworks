@@ -36,6 +36,8 @@ export interface DetailUniforms {
   hue: THREE.IUniform<number>;
   /** very-low-frequency macro tonal patchiness */
   macro: THREE.IUniform<number>;
+  /** strength of the baked per-vertex ambient occlusion */
+  ao: THREE.IUniform<number>;
 }
 
 /** extra floor/plateau layers (terrain only, not decor) */
@@ -80,6 +82,8 @@ export function applyTriplanarDetail(
   top: THREE.Texture,
   u: DetailUniforms,
   layers?: DetailLayers,
+  /** consume a baked per-vertex `ao` attribute (terrain mesh only) */
+  vertexAo = false,
 ): void {
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.uTriSide = { value: side };
@@ -91,6 +95,7 @@ export function applyTriplanarDetail(
     shader.uniforms.uTriContrast = u.contrast;
     shader.uniforms.uTriHue = u.hue;
     shader.uniforms.uTriMacroA = u.macro;
+    if (vertexAo) shader.uniforms.uTriAo = u.ao;
     if (layers) {
       shader.uniforms.uTriDunes = { value: layers.dunes };
       shader.uniforms.uTriGravel = { value: layers.gravel };
@@ -101,11 +106,15 @@ export function applyTriplanarDetail(
     shader.vertexShader = shader.vertexShader
       .replace(
         '#include <common>',
-        '#include <common>\nvarying vec3 vTriPos;\nvarying vec3 vTriNormal;',
+        `#include <common>
+        varying vec3 vTriPos;
+        varying vec3 vTriNormal;
+        ${vertexAo ? 'attribute float ao;\n        varying float vTriAo;' : ''}`,
       )
       .replace(
         '#include <fog_vertex>',
         `#include <fog_vertex>
+        ${vertexAo ? 'vTriAo = ao;' : ''}
         vec4 triWp = vec4( transformed, 1.0 );
         vec3 triN = objectNormal;
         #ifdef USE_INSTANCING
@@ -131,6 +140,7 @@ export function applyTriplanarDetail(
         uniform float uTriContrast;
         uniform float uTriHue;
         uniform float uTriMacroA;
+        ${vertexAo ? 'uniform float uTriAo;\n        varying float vTriAo;' : ''}
         // roughness offset + layer mask weights, computed in color_fragment
         // and consumed by the roughness / normal includes further down
         float triRoughM = 0.0;
@@ -269,7 +279,23 @@ export function applyTriplanarDetail(
           normal = normalize( abs( triJ ) * normal - triGrad );
         }`,
       );
+
+    if (vertexAo) {
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <aomap_fragment>',
+        `#include <aomap_fragment>
+        {
+          // baked crevice AO: full on the indirect (hemi) light, partial on
+          // the sun so pockets still read shaded under direct light
+          float triAo = mix( 1.0, pow( vTriAo, 2.2 ), uTriAo );
+          reflectedLight.indirectDiffuse *= triAo;
+          reflectedLight.directDiffuse *= mix( 1.0, triAo, 0.45 );
+          reflectedLight.directSpecular *= triAo;
+        }`,
+      );
+    }
   };
   // uniforms differ per material but the program is shared per variant
-  mat.customProgramCacheKey = () => (layers ? 'triplanar-layers' : 'triplanar');
+  mat.customProgramCacheKey = () =>
+    (layers ? 'triplanar-layers' : 'triplanar') + (vertexAo ? '-ao' : '');
 }

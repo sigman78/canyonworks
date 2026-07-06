@@ -62,6 +62,7 @@ export function buildTerrainGeometry(
   geometry.setIndex(new THREE.BufferAttribute(nets.indices, 1));
   geometry.computeVertexNormals();
 
+  bakeAo(geometry, data, nx, ny, nz, voxel, originX, originZ);
   colorize(geometry, fields, params, noise);
 
   return {
@@ -69,6 +70,87 @@ export function buildTerrainGeometry(
     vertexCount: nets.positions.length / 3,
     triangleCount: nets.indices.length / 3,
   };
+}
+
+// ---- baked ambient occlusion ---------------------------------------------
+
+/** ray fan: 8 cube corners + 4 horizontal compass dirs (bent toward the normal) */
+const AO_DIRS: ReadonlyArray<readonly [number, number, number]> = (() => {
+  const s = 1 / Math.sqrt(3);
+  const dirs: [number, number, number][] = [];
+  for (const dx of [-1, 1]) for (const dy of [-1, 1]) for (const dz of [-1, 1]) {
+    dirs.push([dx * s, dy * s, dz * s]);
+  }
+  dirs.push([1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]);
+  return dirs;
+})();
+/** march distances (world units) and how much a first hit there occludes */
+const AO_RADII = [0.5, 1.1, 2.2, 4.0];
+const AO_HIT = [1.0, 0.7, 0.45, 0.25];
+
+/**
+ * Per-vertex AO sampled straight from the density volume: short rays fanned
+ * around the vertex normal, first solid hit occludes by distance weight.
+ * Stored as an `ao` attribute; applied in the shader by a live uniform, so
+ * the amount slider needs no rebake.
+ */
+function bakeAo(
+  geometry: THREE.BufferGeometry,
+  data: Float32Array,
+  nx: number,
+  ny: number,
+  nz: number,
+  voxel: number,
+  originX: number,
+  originZ: number,
+): void {
+  const pos = geometry.getAttribute('position') as THREE.BufferAttribute;
+  const nrm = geometry.getAttribute('normal') as THREE.BufferAttribute;
+  const count = pos.count;
+  const ao = new Float32Array(count);
+  const inv = 1 / voxel;
+
+  const solid = (x: number, y: number, z: number): boolean => {
+    const ix = Math.round((x - originX) * inv);
+    if (ix < 0 || ix >= nx) return false;
+    const iy = Math.round(y * inv);
+    if (iy < 0 || iy >= ny) return false;
+    const iz = Math.round((z - originZ) * inv);
+    if (iz < 0 || iz >= nz) return false;
+    return data[ix + iy * nx + iz * nx * ny] > 0;
+  };
+
+  for (let i = 0; i < count; i++) {
+    const vnx = nrm.getX(i);
+    const vny = nrm.getY(i);
+    const vnz = nrm.getZ(i);
+    // start just off the surface so rays don't self-intersect
+    const px = pos.getX(i) + vnx * voxel * 0.8;
+    const py = pos.getY(i) + vny * voxel * 0.8;
+    const pz = pos.getZ(i) + vnz * voxel * 0.8;
+
+    let occ = 0;
+    for (const d of AO_DIRS) {
+      // bend the fan only mildly toward the normal: rays hug the surface,
+      // so nearby walls / pit sides actually get hit (a strongly biased
+      // fan escapes upward and bakes ~1 everywhere)
+      let dx = d[0] + vnx * 0.6;
+      let dy = d[1] + vny * 0.6;
+      let dz = d[2] + vnz * 0.6;
+      const il = 1 / Math.hypot(dx, dy, dz);
+      dx *= il; dy *= il; dz *= il;
+      for (let r = 0; r < AO_RADII.length; r++) {
+        const rr = AO_RADII[r];
+        if (solid(px + dx * rr, py + dy * rr, pz + dz * rr)) {
+          occ += AO_HIT[r];
+          break;
+        }
+      }
+    }
+    ao[i] = 1 - occ / AO_DIRS.length;
+  }
+
+  geometry.setAttribute('ao', new THREE.BufferAttribute(ao, 1));
 }
 
 // ---- Sedona palette -------------------------------------------------------

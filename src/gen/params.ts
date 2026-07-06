@@ -67,6 +67,8 @@ export interface RenderOptions {
   showPassability: boolean;
   flatShading: boolean;
   showDecor: boolean;
+  /** render terrain + decor as wireframe (mesh showcase) */
+  wireframe: boolean;
   /** tri-planar detail texture strength (0 = vertex colors only) */
   texAmount: number;
   /** detail texture world-space frequency */
@@ -81,6 +83,14 @@ export interface RenderOptions {
   texHue: number;
   /** very-low-frequency macro tonal patchiness */
   texMacro: number;
+  /** baked ambient-occlusion strength (0 = off) */
+  aoAmount: number;
+  /** sun horizontal angle, degrees */
+  sunAzimuth: number;
+  /** sun height above horizon, degrees — lower = longer shadows */
+  sunElevation: number;
+  /** shadow darkness (0 = shadows off) */
+  shadowStrength: number;
 }
 
 export type EditMode = 'view' | 'carve' | 'wall';
@@ -149,6 +159,7 @@ export function defaultRenderOptions(): RenderOptions {
     showPassability: false,
     flatShading: true,
     showDecor: true,
+    wireframe: false,
     texAmount: 0.75,
     texScale: 0.22,
     texBump: 0.5,
@@ -156,5 +167,9 @@ export function defaultRenderOptions(): RenderOptions {
     texContrast: 1,
     texHue: 0.3,
     texMacro: 0.3,
+    aoAmount: 0.65,
+    sunAzimuth: -57,
+    sunElevation: 45,
+    shadowStrength: 1,
   };
 }

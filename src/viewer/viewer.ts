@@ -40,9 +40,9 @@ export class IsoViewer {
 
     this.sun = new THREE.DirectionalLight(0xffe0b0, 2.2);
     this.sun.castShadow = true;
-    this.sun.shadow.mapSize.set(2048, 2048);
-    this.sun.shadow.bias = -0.0015;
-    this.sun.shadow.normalBias = 0.4;
+    this.sun.shadow.mapSize.set(4096, 4096);
+    this.sun.shadow.bias = -0.0008;
+    this.sun.shadow.normalBias = 0.2;
     this.scene.add(this.sun);
     this.scene.add(this.sun.target);
 
@@ -53,6 +53,7 @@ export class IsoViewer {
   /** size the sun's shadow frustum to the map */
   fitSunTo(halfW: number, halfD: number): void {
     const s = Math.max(halfW, halfD) * 1.5;
+    this.sunRadius = s * 1.6;
     const cam = this.sun.shadow.camera;
     cam.left = -s;
     cam.right = s;
@@ -61,8 +62,30 @@ export class IsoViewer {
     cam.near = 1;
     cam.far = 300;
     cam.updateProjectionMatrix();
-    this.sun.position.set(-0.55 * s, 1.4 * s, 0.35 * s);
     this.sun.target.position.set(0, 0, 0);
+    this.placeSun();
+  }
+
+  /** aim the sun; azimuth/elevation in degrees (tweakable in the GUI) */
+  setSun(azimuthDeg: number, elevationDeg: number): void {
+    this.sunAzimuth = azimuthDeg;
+    this.sunElevation = elevationDeg;
+    this.placeSun();
+  }
+
+  private sunRadius = 60;
+  private sunAzimuth = -57;
+  private sunElevation = 45;
+
+  private placeSun(): void {
+    const az = (this.sunAzimuth * Math.PI) / 180;
+    const el = (this.sunElevation * Math.PI) / 180;
+    const r = this.sunRadius;
+    this.sun.position.set(
+      r * Math.cos(el) * Math.sin(az),
+      r * Math.sin(el),
+      r * Math.cos(el) * Math.cos(az),
+    );
   }
 
   fitView(halfW: number, halfD: number): void {

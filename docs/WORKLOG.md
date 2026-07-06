@@ -1,5 +1,48 @@
 # Worklog
 
+## 2026-07-05 — v0.10: light pass — baked AO, terrain self-shadowing, sun controls
+
+Goal: tweakable AO + self-shadowing for the terrain; larger boulders
+casting shadows.
+
+- Finding: every mesh already had castShadow/receiveShadow on — shadows
+  just didn't *read*. The sun sat at ~65° elevation (short stubs of
+  shadow) and `normalBias 0.4` swallowed small-object contact shadows.
+- **Baked per-vertex AO** (`bakeAo` in mesher.ts): rays marched through
+  the density volume that's already in hand at meshing time; first solid
+  hit occludes by distance weight. Stored as an `ao` geometry attribute;
+  the shader applies it via a live `AO amount` uniform (full on indirect
+  light, 45% on direct, full on specular) — tweaking needs no rebake.
+  Costs ~50 ms of the regen.
+- AO bake v2 (feedback: barely noticeable even at 1.0): the first fan
+  was too normal-biased (dirs bent by a full normal) — rays escaped
+  upward and 99.5% of vertices baked ~1.0. Now 12 rays (8 corners + 4
+  compass) bent by only 0.6·normal so they hug the surface and actually
+  hit nearby walls, marching 4 steps out to 4 wu to catch canyon-scale
+  enclosure (mean 0.995 -> 0.898, 12x more vertices in shadow range),
+  plus a pow(ao, 2.2) contrast curve in the shader. Wall-base contact
+  lines, hoodoo footings, crater bowls and fissure pits now read.
+- **Sun rig controls** (live): `sun azimuth` / `sun elevation` sliders
+  (spherical placement, radius fitted to the map), `shadow strength`
+  via `light.shadow.intensity` (three r163+). Default elevation dropped
+  65° -> 45° so walls, hoodoos and boulders throw real shadows.
+- Shadow quality: map 2048 -> 4096, normalBias 0.4 -> 0.2, bias
+  -0.0015 -> -0.0008 — boulder contact shadows show, no acne even at
+  28° test elevation.
+- AO + vertex-color contact shade + crack tint stack fine — AO is
+  light-space so it deepens under the hemi fill without muddying the sun
+  side.
+
+- **Wireframe toggle** (View folder): terrain + all decor materials flip
+  to wireframe live (no recompile — it's a render-state flag). Colors,
+  lighting and AO still apply, so the surface-nets topology showcases
+  well: `docs/shots/v0.10-wireframe.jpg`.
+
+Screenshots: `docs/shots/v0.10-light-ao.jpg`,
+`docs/shots/v0.10-light-ao-close.jpg` (AO at 1.0),
+`docs/shots/v0.10-sun-swing.jpg` (azimuth 120 / elevation 28 / AO 1 —
+long evening shadows), `docs/shots/v0.10-wireframe.jpg`.
+
 ## 2026-07-05 — v0.9: bump & sheen from the detail textures + render tweaks
 
 Goal: normal/roughness variation without authoring normal maps. Mid-pass

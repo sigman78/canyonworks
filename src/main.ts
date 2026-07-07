@@ -623,3 +623,7 @@ function downloadJson(filename: string, data: unknown): void {
 const app = new App();
 // dev hook for scripted verification (Playwright): frame a world position
 (window as unknown as Record<string, unknown>).__cw = app;
+// wasm kernel harness (lazy — no cost unless used): __cwWasm.parity()/bench()
+import('./core/wasmGen').then((m) => {
+  (window as unknown as Record<string, unknown>).__cwWasm = m;
+});

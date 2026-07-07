@@ -1,5 +1,47 @@
 # Worklog
 
+## 2026-07-06 — WASM generator scaffold (feature/wasm-gen, stacked on texture-set-v2)
+
+User: move the generator to WASM for higher-level array-processing
+abstractions + native-class speed; backend chosen: **Rust** (wasm-pack +
+wasm-bindgen) over AssemblyScript (no numpy-like layer, no
+autovectorizer), C++/Emscripten (toolchain friction), Zig (DIY glue) —
+Rust is the only candidate scoring on expressiveness (iterators /
+ndarray / rayon), codegen (LLVM + simd128) and TS integration
+(generated .d.ts, vite-compatible pkg) at once.
+
+Scaffold (stage 1):
+- Toolchain: rustup (stable 1.96.1, minimal profile) + wasm32 target +
+  wasm-pack 0.15 (prebuilt binary into .cargo/bin). MSVC build tools
+  were already present (host proc-macros need a host linker).
+- `wasm/` crate: cdylib + wasm-bindgen, simd128 enabled via
+  .cargo/config.toml, LTO release profile. `npm run wasm:build` /
+  `wasm:dev` (also strips wasm-pack's pkg/.gitignore stub — pkg/ is
+  COMMITTED so the GH Pages workflow needs no Rust toolchain; revisit
+  if the wasm grows).
+- **Bit-exact noise port**: mulberry32 (u32 wrapping ops == JS
+  `|0`/`imul`/`>>>`) + simplex-noise v4.0.3 noise2D/noise3D (ported
+  from the installed package source, same f64 operation order) + fbm2/
+  fbm3/ridged2. `NoiseKit(seed)` mirrors makeNoise()'s seed derivation.
+- Harness `src/core/wasmGen.ts` (lazy import, dev hook `__cwWasm`):
+  parity() = max |wasm−js| over a 2k-point cloud; bench() = same fbm3
+  grid fill both worlds.
+
+Results: **parity 0.0 (bit-identical) on both test seeds** — maps stay
+reproducible through the port. Bench (1M voxels, 3-octave fbm3): JS
+198 ms vs WASM 134 ms = **1.5×** for a line-by-line scalar port
+(includes the Vec→Float32Array copy). Honest baseline: V8 JITs this
+f64 scalar code well, and branchy simplex gathers defeat the
+autovectorizer. The planned wins are structural, not line-by-line:
+batch 4-wide SIMD evaluation (v128 lanes), f32 where precision
+permits, zero-copy views into wasm memory, whole-volume-fill port
+(one boundary crossing per regenerate), optional rayon threads later
+(needs COOP/COEP — coi-serviceworker shim on GH Pages).
+
+Next stages: port buildDensityVolume fill (fields sampled into flat
+arrays on the TS side or ported wholesale), then surface nets, then
+the AO bake.
+
 ## 2026-07-06 — palette panel (feature/texture-set-v2)
 
 User: the tri-planar albedo hues — mesa/rocks/canyons — should be

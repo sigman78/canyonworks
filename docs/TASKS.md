@@ -235,6 +235,22 @@
 - [ ] Roughness could key off the normal maps' cavity instead of bare
       luminance
 
+## Next (feature/wasm-gen — Rust WASM generator kernels)
+
+- [x] Scaffold: rustup + wasm-pack toolchain, wasm/ crate (simd128,
+      LTO), npm run wasm:build/wasm:dev, pkg/ committed (no Rust in CI)
+- [x] Bit-exact noise port (mulberry32 + simplex-noise 4.0.3 + fbm/
+      ridged) — parity 0.0; bench harness __cwWasm (1.5× scalar baseline)
+- [ ] Port buildDensityVolume fill: fields → flat arrays across the
+      boundary (or port fields too), zero-copy Float32Array views,
+      one crossing per regenerate
+- [ ] SIMD batch evaluation (4-wide v128 noise) and/or f32 kernels —
+      the structural speedups the scalar port can't reach
+- [ ] Surface nets port; then AO bake (26-dir probes are the most
+      SIMD/thread-friendly kernel we have)
+- [ ] Optional: rayon threads behind wasm-bindgen-rayon + a
+      coi-serviceworker shim for GH Pages (SharedArrayBuffer headers)
+
 ## Next (research/voxel3d — arches & overhangs, NO tunnels)
 
 - [ ] Look iteration with user: arch proportions/count, wash

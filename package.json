@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "wasm:build": "wasm-pack build wasm --target web --release && node -e \"require('fs').rmSync('wasm/pkg/.gitignore',{force:true})\"",
+    "wasm:dev": "wasm-pack build wasm --target web --dev && node -e \"require('fs').rmSync('wasm/pkg/.gitignore',{force:true})\""
   },
   "dependencies": {
     "lil-gui": "^0.20.0",

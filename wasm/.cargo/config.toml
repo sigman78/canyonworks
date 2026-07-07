@@ -1,0 +1,7 @@
+# wasm SIMD128 for LLVM autovectorization; supported by every browser
+# that runs this sandbox (Chrome 91+, Firefox 89+, Safari 16.4+)
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "target-feature=+simd128"]
+
+[build]
+target = "wasm32-unknown-unknown"

@@ -8,6 +8,10 @@ import { generateLayout, largestComponent, type LayoutResult } from './gen/layou
 import { buildTerrainGeometry } from './gen/mesher';
 import { defaultParams, defaultRenderOptions, type EditMode, type GenParams, type RenderOptions } from './gen/params';
 import { BrushEditor } from './edit/editor';
+import { DECOR_PALETTE } from './gen/decor';
+import { TERRAIN_PALETTE } from './gen/mesher';
+import { buildMaterialEditor, type MaterialEditor, type MaterialSlot } from './ui/materialEditor';
+import { buildPalettePanel, type PaletteGroup } from './ui/palettePanel';
 import { buildPanel } from './ui/panel';
 import { buildGridLines, buildPassabilityOverlay, disposeObject } from './viewer/overlays';
 import { buildMesaFog } from './viewer/mesaFog';
@@ -87,6 +91,8 @@ class App {
     mesa: { value: neutralNormalTexture() as THREE.Texture },
   };
 
+  private materialEditor: MaterialEditor | null = null;
+
   private layout!: LayoutResult;
   private fields!: Fields;
   private blocked = new Uint8Array(0);
@@ -161,6 +167,11 @@ class App {
       onEditModeChanged: (m) => this.editor.setMode(m),
       onBrushRadiusChanged: (r) => (this.editor.brushRadius = r),
       rotateView: (dir) => this.viewer.rotateStep(dir),
+      buildMaterials: (gui) => {
+        this.materialEditor = buildMaterialEditor(gui, this.materialSlots());
+        // applies any persisted palette BEFORE the first regenerate below
+        buildPalettePanel(gui, paletteGroups(), () => this.regenerate(false));
+      },
     });
 
     this.bindKeys();
@@ -294,6 +305,64 @@ class App {
       this.fields,
     );
     this.mapRoot.add(this.gridLines, this.passOverlay);
+    // decor/fog/overlay materials are freshly created — re-apply overrides
+    this.materialEditor?.applyAll();
+  }
+
+  /** editable material slots for the Materials GUI folder */
+  private materialSlots(): MaterialSlot[] {
+    const collect = (
+      root: THREE.Object3D | null,
+      pred: (m: THREE.Material) => boolean,
+    ): THREE.Material[] => {
+      const out: THREE.Material[] = [];
+      root?.traverse((o) => {
+        const m = (o as THREE.Mesh).material;
+        if (m && !Array.isArray(m) && pred(m) && !out.includes(m)) out.push(m);
+      });
+      return out;
+    };
+    const scalar = (
+      key: string,
+      def: number,
+      max = 1,
+      label?: string,
+    ): { key: string; label?: string; min: number; max: number; step: number; def: number } => ({
+      key,
+      label,
+      min: 0,
+      max,
+      step: 0.01,
+      def,
+    });
+    return [
+      {
+        key: 'terrain',
+        name: 'Terrain',
+        params: [scalar('roughness', 1), scalar('metalness', 0)],
+        materials: () => [this.terrainMaterial],
+      },
+      {
+        key: 'rock',
+        name: 'Rock decor',
+        params: [scalar('roughness', 1), scalar('metalness', 0)],
+        materials: () =>
+          collect(this.decorGroup, (m) => (m as THREE.MeshStandardMaterial).isMeshStandardMaterial),
+      },
+      {
+        key: 'fog',
+        name: 'Mesa fog',
+        params: [scalar('opacity', 1)],
+        materials: () => collect(this.fogGroup, (m) => (m as THREE.MeshBasicMaterial).isMeshBasicMaterial),
+      },
+      {
+        key: 'grid',
+        name: 'Hex grid',
+        params: [scalar('opacity', 0.38)],
+        materials: () =>
+          collect(this.gridLines, (m) => (m as THREE.LineBasicMaterial).isLineBasicMaterial),
+      },
+    ];
   }
 
   /** tracks the legacy toggle so flipping it swaps the shading default */
@@ -454,6 +523,72 @@ class App {
       params: this.params,
     });
   }
+}
+
+/** generator palettes for the Palette panel — live Color objects */
+function paletteGroups(): PaletteGroup[] {
+  const T = TERRAIN_PALETTE;
+  const D = DECOR_PALETTE;
+  return [
+    {
+      key: 'walls',
+      name: 'Canyon walls',
+      entries: T.strata.map((color, i) => ({
+        key: `stratum${i}`,
+        label: `stratum ${i + 1}${i === 0 ? ' (base)' : i === T.strata.length - 1 ? ' (top)' : ''}`,
+        color,
+      })),
+    },
+    {
+      key: 'floor',
+      name: 'Floor',
+      entries: [
+        { key: 'sand', label: 'sand', color: T.floorA },
+        { key: 'dust', label: 'dust', color: T.floorB },
+        { key: 'crevice', label: 'contact shade', color: T.crevice },
+      ],
+    },
+    {
+      key: 'mesa',
+      name: 'Mesa top',
+      entries: [{ key: 'cap', label: 'plateau cap', color: T.cap }],
+    },
+    {
+      key: 'craters',
+      name: 'Craters',
+      entries: [
+        { key: 'bowl', label: 'bowl', color: T.craterIn },
+        { key: 'slope', label: 'inner slope', color: T.craterWall },
+        { key: 'rim', label: 'rim crest', color: T.craterRim },
+        { key: 'ejecta', label: 'ejecta dust', color: T.ejecta },
+      ],
+    },
+    {
+      key: 'fissures',
+      name: 'Fissures',
+      entries: [
+        { key: 'deep', label: 'depths', color: T.crackDeep },
+        { key: 'lip', label: 'lip', color: T.crackLip },
+      ],
+    },
+    {
+      key: 'rocks',
+      name: 'Rocks (decor)',
+      entries: [
+        ...D.tones.map((color, i) => ({ key: `tone${i}`, label: `tone ${i + 1}`, color })),
+        { key: 'skirt', label: 'sand skirt', color: D.sandContact },
+      ],
+    },
+    {
+      key: 'pillars',
+      name: 'Pillars',
+      entries: [
+        ...D.pillarStrata.map((color, i) => ({ key: `band${i}`, label: `band ${i + 1}`, color })),
+        { key: 'butteSlab', label: 'butte slab', color: D.butteSlab },
+        { key: 'hoodooCap', label: 'hoodoo cap', color: D.hoodooCap },
+      ],
+    },
+  ];
 }
 
 function loadParams(): GenParams {

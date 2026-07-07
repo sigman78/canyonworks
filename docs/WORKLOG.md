@@ -1,5 +1,62 @@
 # Worklog
 
+## 2026-07-06 — palette panel (feature/texture-set-v2)
+
+User: the tri-planar albedo hues — mesa/rocks/canyons — should be
+tweakable too. Those colors are the GENERATOR's vertex palette
+(textures only modulate it): mesher.ts colorize() bakes the Sedona
+constants into vertex colors, decor.ts bakes rock/pillar tones per
+instance. New "Palette" GUI folder (ui/palettePanel.ts):
+
+- mesher's palette constants restructured into an exported live-object
+  `TERRAIN_PALETTE` (strata ×5, floor sand/dust, plateau cap, crevice,
+  crater bowl/slope/rim/ejecta, fissure depths/lip); decor gets
+  `DECOR_PALETTE` (rock tones ×5, sand skirt, pillar bands ×4, butte
+  slab, hoodoo cap). Internal aliases keep the diff minimal.
+- Pillar butte tops now reference the SAME Color object as the mesa
+  plateau cap (they were duplicate constants) — tweaking the cap keeps
+  pillar tops in family automatically.
+- Color pickers mutate the live Colors; the mesh re-bake (full
+  regenerate) fires on onFinishChange only — dragging the picker stays
+  cheap, commit re-bakes (~0.5 s).
+- Persists in localStorage `canyonworks.palette.v1` as sRGB hex strings
+  (round-trips THREE's color management: getHexString/set). Stored
+  values are applied to the Colors at panel construction, BEFORE the
+  app's first regenerate. Per-group "↺ defaults" reset.
+
+Verified in-browser: GUI-driven teal strata re-bake the walls, survive
+a full reload, and reset back to the Sedona defaults.
+
+## 2026-07-06 — material editor (feature/texture-set-v2)
+
+User: material editor for the scene's main material scalar parameters.
+New "Materials" GUI folder (ui/materialEditor.ts) with a sub-panel per
+material slot:
+
+- **Terrain** (MeshStandardMaterial): roughness, metalness
+- **Rock decor** (all boulder/pillar/scree materials as one slot):
+  roughness, metalness
+- **Mesa fog**: opacity
+- **Hex grid**: opacity
+
+Design notes:
+- Slots fetch their LIVE materials on every apply — decor, fog and
+  overlay materials are recreated on each regenerate, so the editor
+  re-applies stored values from `rebuildOverlays()` (covers regenerate
+  AND the brush quick-update path). Holding material references would
+  edit orphans.
+- Overrides persist in localStorage `canyonworks.materials.v1`,
+  separate from the gen params blob; per-slot "↺ defaults" reset.
+  State always stores a value per param (default when untouched), so
+  apply() writes unconditionally onto fresh materials.
+- Panel integration via an optional `buildMaterials(gui)` callback so
+  the folder lands between Render tweaks and the action buttons.
+
+Verified in-browser end-to-end: slider drives the live material +
+persists; reload restores terrain metalness AND rock roughness; a
+new-seed regenerate re-applies overrides onto the freshly created
+decor materials.
+
 ## 2026-07-06 — texture set v2 (feature/texture-set-v2): richer colors, canonical normals
 
 User: regenerate the texture set with richer colors, proper

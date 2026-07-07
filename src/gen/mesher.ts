@@ -147,18 +147,38 @@ function bakeAo(
 // ---- Sedona palette -------------------------------------------------------
 
 const C = (hex: number) => new THREE.Color(hex);
-/** cliff strata bands, bottom to top */
-const STRATA = [C(0x83341a), C(0xb04a20), C(0x9c3f1e), C(0xc9662f), C(0xd57d3e)];
-const FLOOR_A = C(0xdb9d5c); // warm sand
-const FLOOR_B = C(0xbd7a44); // rustier dust
-const CAP = C(0xedc79a); // pale plateau cap
-const CREVICE = C(0x54240f); // deep shade at wall contact
-const CRATER_IN = C(0x9c6a54); // dusty ash-taupe bowl (cooler than rust walls)
-const CRATER_WALL = C(0xc08a5f); // tan inner slope
-const CRATER_RIM = C(0xf2d4a6); // sun-bleached rim crest
-const EJECTA = C(0xe7ba8a); // pale ejecta dust ring
-const CRACK_DEEP = C(0x2b1208); // fissure slot interior, falls to near-black
-const CRACK_LIP = C(0xecc9a0); // pale weathered lip along the fissure edge
+
+/**
+ * Sedona palette, baked into vertex colors by colorize(). EXPORTED LIVE
+ * OBJECTS: the Palette panel (ui/palettePanel.ts) mutates these Colors
+ * and triggers a regenerate — colorize() reads them fresh each run.
+ */
+export const TERRAIN_PALETTE = {
+  /** cliff strata bands, bottom to top */
+  strata: [C(0x83341a), C(0xb04a20), C(0x9c3f1e), C(0xc9662f), C(0xd57d3e)],
+  floorA: C(0xdb9d5c), // warm sand
+  floorB: C(0xbd7a44), // rustier dust
+  cap: C(0xedc79a), // pale plateau cap (pillar butte tops share this)
+  crevice: C(0x54240f), // deep shade at wall contact
+  craterIn: C(0x9c6a54), // dusty ash-taupe bowl (cooler than rust walls)
+  craterWall: C(0xc08a5f), // tan inner slope
+  craterRim: C(0xf2d4a6), // sun-bleached rim crest
+  ejecta: C(0xe7ba8a), // pale ejecta dust ring
+  crackDeep: C(0x2b1208), // fissure slot interior, falls to near-black
+  crackLip: C(0xecc9a0), // pale weathered lip along the fissure edge
+};
+
+const STRATA = TERRAIN_PALETTE.strata;
+const FLOOR_A = TERRAIN_PALETTE.floorA;
+const FLOOR_B = TERRAIN_PALETTE.floorB;
+const CAP = TERRAIN_PALETTE.cap;
+const CREVICE = TERRAIN_PALETTE.crevice;
+const CRATER_IN = TERRAIN_PALETTE.craterIn;
+const CRATER_WALL = TERRAIN_PALETTE.craterWall;
+const CRATER_RIM = TERRAIN_PALETTE.craterRim;
+const EJECTA = TERRAIN_PALETTE.ejecta;
+const CRACK_DEEP = TERRAIN_PALETTE.crackDeep;
+const CRACK_LIP = TERRAIN_PALETTE.crackLip;
 
 function colorize(
   geometry: THREE.BufferGeometry,

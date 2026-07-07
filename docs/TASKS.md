@@ -213,13 +213,25 @@
 - [x] Accent normal maps packed 2-per-RGBA (sampler budget: 15/16)
 - [x] HUD: vox raw/sparse KB
 
+## Done (texture set v2 — richer colors, canonical normals)
+
+- [x] All 9 albedos regenerated at 2K with color-rich prompts (3-5 named
+      hues each: multicolored gravel stones, vermilion/plum/cream cliff
+      strata with varnish streaks…) — tools/gen-textures.mjs
+- [x] Mean-luminance normalization to 128 baked into the generator
+      (+ --normalize-only re-level mode): the shader treats texels as
+      raw ~0.5 values, a bright-mean texture bleaches its surfaces
+- [x] Non-flipped normal maps: explicit channel directions in the
+      prompt + deterministic per-channel sign calibration against the
+      height-map gradient (falls back to albedo luminance) — files are
+      canonical, AUTHORED_FLIP_R loader hack retired. Calibration log
+      proved per-map flips necessary: 7/9 came out R-inverted, mesa
+      correct-handed
+- [x] Heights regenerated from the v2 albedos (7 top layers)
+- [x] sharp devDependency for the tool pipeline (encode/resample/stats)
+
 ## Next (rendering/textures)
 
-- [ ] Regenerate/expand the texture set with richer color + higher res
-      (nano-banana2 key) now that own-color blending makes it matter
-- [ ] Accent layers (dunes/gravel/drift/rubble/crater) currently have no
-      bump under the normal-map path — bake + pack their normals if the
-      loss shows (sampler budget: pack 2 maps per RGBA texture)
 - [ ] Roughness could key off the normal maps' cavity instead of bare
       luminance
 

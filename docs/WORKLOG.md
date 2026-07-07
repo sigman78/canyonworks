@@ -1,5 +1,104 @@
 # Worklog
 
+## 2026-07-06 — palette panel (feature/texture-set-v2)
+
+User: the tri-planar albedo hues — mesa/rocks/canyons — should be
+tweakable too. Those colors are the GENERATOR's vertex palette
+(textures only modulate it): mesher.ts colorize() bakes the Sedona
+constants into vertex colors, decor.ts bakes rock/pillar tones per
+instance. New "Palette" GUI folder (ui/palettePanel.ts):
+
+- mesher's palette constants restructured into an exported live-object
+  `TERRAIN_PALETTE` (strata ×5, floor sand/dust, plateau cap, crevice,
+  crater bowl/slope/rim/ejecta, fissure depths/lip); decor gets
+  `DECOR_PALETTE` (rock tones ×5, sand skirt, pillar bands ×4, butte
+  slab, hoodoo cap). Internal aliases keep the diff minimal.
+- Pillar butte tops now reference the SAME Color object as the mesa
+  plateau cap (they were duplicate constants) — tweaking the cap keeps
+  pillar tops in family automatically.
+- Color pickers mutate the live Colors; the mesh re-bake (full
+  regenerate) fires on onFinishChange only — dragging the picker stays
+  cheap, commit re-bakes (~0.5 s).
+- Persists in localStorage `canyonworks.palette.v1` as sRGB hex strings
+  (round-trips THREE's color management: getHexString/set). Stored
+  values are applied to the Colors at panel construction, BEFORE the
+  app's first regenerate. Per-group "↺ defaults" reset.
+
+Verified in-browser: GUI-driven teal strata re-bake the walls, survive
+a full reload, and reset back to the Sedona defaults.
+
+## 2026-07-06 — material editor (feature/texture-set-v2)
+
+User: material editor for the scene's main material scalar parameters.
+New "Materials" GUI folder (ui/materialEditor.ts) with a sub-panel per
+material slot:
+
+- **Terrain** (MeshStandardMaterial): roughness, metalness
+- **Rock decor** (all boulder/pillar/scree materials as one slot):
+  roughness, metalness
+- **Mesa fog**: opacity
+- **Hex grid**: opacity
+
+Design notes:
+- Slots fetch their LIVE materials on every apply — decor, fog and
+  overlay materials are recreated on each regenerate, so the editor
+  re-applies stored values from `rebuildOverlays()` (covers regenerate
+  AND the brush quick-update path). Holding material references would
+  edit orphans.
+- Overrides persist in localStorage `canyonworks.materials.v1`,
+  separate from the gen params blob; per-slot "↺ defaults" reset.
+  State always stores a value per param (default when untouched), so
+  apply() writes unconditionally onto fresh materials.
+- Panel integration via an optional `buildMaterials(gui)` callback so
+  the folder lands between Render tweaks and the action buttons.
+
+Verified in-browser end-to-end: slider drives the live material +
+persists; reload restores terrain metalness AND rock roughness; a
+new-seed regenerate re-applies overrides onto the freshly created
+decor materials.
+
+## 2026-07-06 — texture set v2 (feature/texture-set-v2): richer colors, canonical normals
+
+User: regenerate the texture set with richer colors, proper
+materials/details, non-flipped normal maps. All 25 assets regenerated
+(9 albedos at 2K, 7 heights, 9 normals at 1K).
+
+- **Richer color**: every albedo prompt now names 3-5 distinct hues
+  (gravel: terracotta / plum-grey / cream / ochre / near-black varnish;
+  cliff: vermilion / burnt-sienna / plum strata + cream caps + blue-grey
+  varnish streaks; crater: ash-taupe / dusty rose / lilac / sage…).
+  V1 read as tinted grayscale; v2 stones on the floor are individually
+  colored. Same-seed A/B: overall scene brightness identical (the
+  vertex palette still owns the grading), floor +5% with much higher
+  chroma.
+- **Mean-luminance normalization** baked into gen-textures.mjs
+  (`--normalize-only` re-levels without API calls): the shader treats
+  texels as raw ~0.5-neutral values, so a bright-mean texture bleaches
+  everything it covers. The fresh set came back 106-197 mean (drift
+  197!) — all re-leveled to 128 multiplicatively (hue survives).
+  Empirically the visible effect was small (~3%) because the palette
+  dominates, but the contract is worth keeping.
+- **Non-flipped normal maps**: two-layer fix. (1) The prompt now spells
+  out channel directions ("where the surface tilts to face the RIGHT
+  edge, red brighter than 128…"). (2) gen-normalmaps.mjs calibrates
+  each generated map deterministically — correlates R/G (blurred,
+  128px) against the gradient of the texture's own _h.png (bright =
+  raised by construction; albedo luminance fallback for cliff/rock) and
+  flips inverted channels IN THE FILE. Result: canonical files, the
+  AUTHORED_FLIP_R loader hack retired (knobs kept at false for
+  hand-dropped maps). The log vindicated per-map calibration: 7/9 maps
+  came out R-inverted but MESA was correct-handed — a fixed global flip
+  (the v1 approach) would have silently broken it. Strong correlations
+  (gravel -0.71, rubble -0.73, mesa +0.81) confirm GenAI keeps layouts
+  aligned enough to verify automatically after all.
+- In-engine check (bump 0.5, sun -57°): stone relief lit consistently
+  with geometry shadows — handedness correct; no seams (plain Repeat +
+  anti-tiling dual tap); 2K albedos may contain an internal ~2x2 repeat
+  painted by the model (effective detail ~1K) — acceptable, revisit if
+  ground repetition shows.
+- Tooling: sharp added as devDependency (JPEG encode, resampling,
+  stats); img2img sources downscaled to 1K before upload.
+
 ## 2026-07-06 — v0.16 (research/voxel3d): real normal maps + texture albedo blend
 
 Rendering/textures track kickoff (user: textures read as "monochrome

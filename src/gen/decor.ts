@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { HexGrid } from '../core/hex';
 import { mulberry32, randRange, type Rng } from '../core/rng';
 import { fbm3, smoothstep, type NoiseKit } from '../core/noise';
+import { TERRAIN_PALETTE } from './mesher';
 import { applyTriplanarDetail, type DetailUniforms } from '../viewer/terrainMaterial';
 import type { Fields } from './fields';
 import type { GenParams } from './params';
@@ -27,9 +28,25 @@ export interface DecorDetail {
   };
 }
 
-const ROCK_TONES = [0xa8542c, 0x96482a, 0xb56336, 0x8a4224, 0xc07444];
-/** canyon-floor sand tone blended into decor at ground contact */
-const SAND_CONTACT = new THREE.Color(0xcf8e52);
+const C = (hex: number) => new THREE.Color(hex);
+
+/**
+ * Decor palette — live objects, mutated by the Palette panel
+ * (ui/palettePanel.ts) + regenerate, like mesher's TERRAIN_PALETTE.
+ */
+export const DECOR_PALETTE = {
+  /** boulder/scree/rubble tones, picked per instance */
+  tones: [C(0xa8542c), C(0x96482a), C(0xb56336), C(0x8a4224), C(0xc07444)],
+  /** canyon-floor sand tone blended into decor at ground contact */
+  sandContact: C(0xcf8e52),
+  /** pillar shaft strata bands (cycled bottom to top) */
+  pillarStrata: [C(0xa04a24), C(0xbe5c2c), C(0xcf7038), C(0xda8748)],
+  butteSlab: C(0x54301c), // dark caprock slab overhanging butte tops
+  hoodooCap: C(0x8a4224), // hoodoo/totem cap boulder
+};
+
+const ROCK_TONES = DECOR_PALETTE.tones;
+const SAND_CONTACT = DECOR_PALETTE.sandContact;
 
 export function buildDecor(
   grid: HexGrid,
@@ -158,7 +175,7 @@ function scatterBoulders(
       new THREE.Vector3(scale, scale * randRange(rng, 0.7, 1.0), scale),
     );
     mesh.setMatrixAt(count, m);
-    color.setHex(ROCK_TONES[Math.floor(rng() * ROCK_TONES.length)]);
+    color.copy(ROCK_TONES[Math.floor(rng() * ROCK_TONES.length)]);
     color.multiplyScalar(randRange(rng, 0.85, 1.1));
     mesh.setColorAt(count, color);
     placed.push({ x, z, s: scale });
@@ -299,8 +316,8 @@ function makePillar(
   const pos = geo.getAttribute('position') as THREE.BufferAttribute;
   const colors = new Float32Array(pos.count * 3);
   const tone = new THREE.Color();
-  const strata = [0xa04a24, 0xbe5c2c, 0xcf7038, 0xda8748];
-  const capTonePale = new THREE.Color(0xedc79a);
+  const strata = DECOR_PALETTE.pillarStrata;
+  const capTonePale = TERRAIN_PALETTE.cap; // butte tops match the mesa cap
 
   for (let i = 0; i < pos.count; i++) {
     const t = pos.getY(i); // 0 bottom .. 1 top
@@ -323,7 +340,7 @@ function makePillar(
     pos.setXYZ(i, pos.getX(i) * r0 * rMul + lx * wy, wy, pos.getZ(i) * r0 * rMul + lz * wy);
 
     const band = Math.floor(wy / bandStep);
-    tone.setHex(strata[((band % strata.length) + strata.length) % strata.length]);
+    tone.copy(strata[((band % strata.length) + strata.length) % strata.length]);
     tone.multiplyScalar(0.9 + n * 0.12);
     // butte tops read as pale mesa slickrock
     if (style === 'butte') tone.lerp(capTonePale, smoothstep(0.88, 0.99, t) * 0.85);
@@ -358,7 +375,7 @@ function makePillar(
   if (style === 'butte') {
     const capR = r0 * randRange(rng, 1.15, 1.3);
     const capGeo = makeRockGeometry(noise, seed + 5.7, 0.22);
-    const capTone = new THREE.Color(0x54301c).multiplyScalar(randRange(rng, 0.85, 1.1));
+    const capTone = DECOR_PALETTE.butteSlab.clone().multiplyScalar(randRange(rng, 0.85, 1.1));
     const slab = new THREE.Mesh(
       capGeo,
       new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0, flatShading: true, color: capTone }),
@@ -376,7 +393,7 @@ function makePillar(
   if (rng() < capChance) {
     const capR = r0 * randRange(rng, 1.3, 1.9);
     const capGeo = makeRockGeometry(noise, seed + 11.3, 0.3);
-    const capTone = new THREE.Color(0x8a4224).multiplyScalar(randRange(rng, 0.9, 1.08));
+    const capTone = DECOR_PALETTE.hoodooCap.clone().multiplyScalar(randRange(rng, 0.9, 1.08));
     const cap = new THREE.Mesh(
       capGeo,
       new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0, flatShading: true, color: capTone }),
@@ -399,7 +416,7 @@ function makePillar(
     const d = r0 * randRange(rng, 1.25, 1.6);
     const s = randRange(rng, 0.1, 0.22);
     const rubbleMat = rockMaterial();
-    rubbleMat.color.setHex(ROCK_TONES[Math.floor(rng() * ROCK_TONES.length)]);
+    rubbleMat.color.copy(ROCK_TONES[Math.floor(rng() * ROCK_TONES.length)]);
     const rock = new THREE.Mesh(rubbleGeo, rubbleMat);
     rock.scale.set(s, s * 0.75, s);
     rock.position.set(Math.cos(a) * d, s * 0.3, Math.sin(a) * d);
@@ -470,7 +487,7 @@ function spreadScree(
       q.setFromEuler(e);
       m.compose(new THREE.Vector3(sx, y, sz), q, new THREE.Vector3(s, s * 0.75, s));
       mesh.setMatrixAt(count, m);
-      color.setHex(ROCK_TONES[Math.floor(rng() * ROCK_TONES.length)]);
+      color.copy(ROCK_TONES[Math.floor(rng() * ROCK_TONES.length)]);
       color.multiplyScalar(randRange(rng, 0.8, 1.05));
       mesh.setColorAt(count, color);
       count++;

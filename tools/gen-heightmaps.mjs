@@ -9,6 +9,7 @@
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import sharp from 'sharp';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const texDir = join(root, 'public', 'textures');
@@ -61,7 +62,10 @@ const PROMPT =
 async function generate(name) {
   const src = join(texDir, `${name}.jpg`);
   if (!existsSync(src)) throw new Error(`missing source texture: ${src}`);
-  const srcB64 = readFileSync(src).toString('base64');
+  // send a 1K copy — the model outputs 1K anyway, no point shipping 2K up
+  const srcB64 = (
+    await sharp(src).resize(1024, 1024, { fit: 'fill' }).jpeg({ quality: 90 }).toBuffer()
+  ).toString('base64');
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`;
   const res = await fetch(url, {
     method: 'POST',

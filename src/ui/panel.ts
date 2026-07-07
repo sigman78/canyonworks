@@ -13,6 +13,8 @@ export interface PanelCallbacks {
   onBrushRadiusChanged(r: number): void;
   /** orbit the camera a quarter turn around the map (terrain stays put) */
   rotateView(dir: 1 | -1): void;
+  /** hook to append the material-editor folder (ui/materialEditor.ts) */
+  buildMaterials?(gui: GUI): void;
 }
 
 export interface EditState {
@@ -206,6 +208,8 @@ export function buildPanel(
     .add(render, 'cloudShadow', 0, 0.6, 0.05)
     .name('cloud shadows')
     .onChange(() => cb.onRenderOptionChanged());
+
+  cb.buildMaterials?.(gui);
 
   const actions = {
     regenerate: () => cb.regenerate(),

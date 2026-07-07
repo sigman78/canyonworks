@@ -40,13 +40,12 @@ function drawToPixels(img: CanvasImageSource, w: number, h: number): Pixels {
   return { data: ctx.getImageData(0, 0, w, h).data, w, h };
 }
 
-// Calibration for the GenAI-authored maps (tools/gen-normalmaps.mjs):
-// nano-banana2 draws the RED channel with inverted handedness vs our
-// in-engine convention (normals point left where they should point right
-// — user-observed, and unverifiable automatically since the generated
-// layouts aren't pixel-aligned with the albedo). Flip the relevant
-// channel(s) here if a future map set behaves differently.
-const AUTHORED_FLIP_R = true;
+// Calibration for the GenAI-authored maps: since texture set v2 the
+// generator (tools/gen-normalmaps.mjs) writes CANONICAL handedness — it
+// correlates each channel against the height-map gradient and flips
+// inverted channels in the file itself. These stay as emergency knobs
+// for hand-dropped maps; both false for a compliant set.
+const AUTHORED_FLIP_R = false;
 const AUTHORED_FLIP_G = false;
 
 /** authored/GenAI normal map if the file exists, else null */

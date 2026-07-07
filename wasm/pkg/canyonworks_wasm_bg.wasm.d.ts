@@ -4,6 +4,7 @@ export const memory: WebAssembly.Memory;
 export const __wbg_netsresult_free: (a: number, b: number) => void;
 export const __wbg_noisekit_free: (a: number, b: number) => void;
 export const __wbg_volumeresult_free: (a: number, b: number) => void;
+export const bake_ao: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number];
 export const fill_volume: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number) => number;
 export const netsresult_indices: (a: number) => [number, number];
 export const netsresult_positions: (a: number) => [number, number];

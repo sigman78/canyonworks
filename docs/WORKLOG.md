@@ -1,5 +1,25 @@
 # Worklog
 
+## 2026-07-06 — WASM AO bake (feature/wasm-gen, stage 4)
+
+bakeAo ported (`wasm/src/ao.rs`, `bake_ao`): 12-ray fan (order-exact
+table build), 4-radius first-hit march, js_round probe lookups. JS side
+refactored to a pure `computeAoJs` (raw arrays, no THREE dependency) so
+the dispatch is `tryWasmAo(...) ?? computeAoJs(...)` at the mesher call
+site — volumeWasm never imports mesher (would cycle). The flagged
+Math.hypot-3-arg ULP risk did NOT materialize: **parity byte-identical
+on both seeds** (0 diffs over 65.6k / 76.8k verts).
+
+Pipeline table (4-run avg, wasm vs js):
+  volumeFill   81.4 -> 61.3 ms  (1.33×)
+  surfaceNets  23.3 -> 13.3 ms  (1.75×)
+  aoBake       87.7 -> 38.8 ms  (2.26×)
+  total       337   -> 254 ms   (regen ~25% faster end-to-end)
+Standalone aoParity: 92 -> 50 ms / 110 -> 45 ms. AO gains most so far —
+pure probe marching with zero allocation pressure suits wasm best.
+Remaining JS stages: colorize 38.5 (port next), fogOverlays 54.9
+(mostly three.js object building, poor wasm fit), fields 27.8.
+
 ## 2026-07-06 — WASM surface nets + per-stage perf tracking (feature/wasm-gen, stage 3)
 
 surfaceNets ported to Rust (`wasm/src/nets.rs`, `surface_nets`) — takes

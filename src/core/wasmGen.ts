@@ -1,3 +1,4 @@
+import * as THREE from 'three';
 import { fbm3, makeNoise } from './noise';
 import { placeCarveOps } from '../gen/carves';
 import { surfaceNets } from '../gen/surfacenets';
@@ -252,10 +253,108 @@ export async function netsParity(): Promise<{
 }
 
 /**
+ * AO-bake parity/bench: rebuilds the pipeline up to normals ONCE via the
+ * pure-JS path (buildDensityVolume + surfaceNets + THREE
+ * computeVertexNormals), then bakes AO from those SAME inputs with the JS
+ * computeAoJs and the wasm bake_ao and compares per element. NOT guaranteed
+ * exactly zero: the JS normalizes ray directions with 3-arg Math.hypot,
+ * the Rust with sqrt-of-sum-of-squares — a last-ULP direction difference
+ * can flip a probe voxel at a Math.round boundary (see wasm/src/ao.rs).
+ * Expected: near-zero exactDiffCount, tiny maxDiff.
+ *
+ * Usage (dev console / Playwright): `await __cwWasm.aoParity()`
+ */
+export async function aoParity(): Promise<{
+  verts: number;
+  exactDiffCount: number;
+  maxDiff: number;
+  jsMs: number;
+  wasmMs: number;
+}> {
+  await initWasmGen();
+  const wasm = await wasmGen();
+  // dynamic import: gen/volumeWasm imports this module, and gen/mesher
+  // imports gen/volumeWasm — a static mesher import here would close the
+  // cycle in the static graph
+  const { computeAoJs } = await import('../gen/mesher');
+  const app = (window as unknown as { __cw?: unknown }).__cw as
+    | {
+        grid: Parameters<typeof placeCarveOps>[0];
+        fields: Parameters<typeof placeCarveOps>[1];
+        params: Parameters<typeof placeCarveOps>[2];
+        noise: Parameters<typeof placeCarveOps>[3];
+      }
+    | undefined;
+  if (!app) throw new Error('[wasm-ao] window.__cw not found — run inside the app');
+  const { grid, fields, params, noise } = app;
+  const ops = placeCarveOps(grid, fields, params, noise);
+  const vol = buildDensityVolume(fields, params, noise, ops);
+  const nets = surfaceNets(vol.data, vol.nx, vol.ny, vol.nz, vol.voxel, vol.originX, 0, vol.originZ, vol);
+
+  // same normals as the mesher: THREE's computeVertexNormals on the JS mesh
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(nets.positions, 3));
+  geometry.setIndex(new THREE.BufferAttribute(nets.indices, 1));
+  geometry.computeVertexNormals();
+  const normals = (geometry.getAttribute('normal') as THREE.BufferAttribute).array as Float32Array;
+
+  const t0 = performance.now();
+  const js = computeAoJs(
+    nets.positions,
+    normals,
+    vol.data,
+    vol.nx,
+    vol.ny,
+    vol.nz,
+    vol.voxel,
+    vol.originX,
+    vol.originZ,
+  );
+  const jsMs = performance.now() - t0;
+
+  const t1 = performance.now();
+  // .d.ts may lag bake_ao — cast through `any`, same as fill_volume
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const wasmAo = (wasm as any).bake_ao(
+    nets.positions,
+    normals,
+    vol.data,
+    vol.nx >>> 0,
+    vol.ny >>> 0,
+    vol.nz >>> 0,
+    vol.voxel,
+    vol.originX,
+    vol.originZ,
+  ) as Float32Array;
+  const wasmMs = performance.now() - t1;
+
+  geometry.dispose();
+
+  let exactDiffCount = Math.abs(js.length - wasmAo.length);
+  let maxDiff = 0;
+  const n = Math.min(js.length, wasmAo.length);
+  for (let i = 0; i < n; i++) {
+    if (js[i] !== wasmAo[i]) {
+      exactDiffCount++;
+      const d = Math.abs(js[i] - wasmAo[i]);
+      if (d > maxDiff) maxDiff = d;
+    }
+  }
+
+  return {
+    verts: js.length,
+    exactDiffCount,
+    maxDiff,
+    jsMs: Math.round(jsMs * 10) / 10,
+    wasmMs: Math.round(wasmMs * 10) / 10,
+  };
+}
+
+/**
  * Per-stage JS-vs-WASM pipeline comparison: runs full regenerates with
  * wasmGen off, then on, averaging the call-site stage timings (core/perf)
  * across runs. Also prints a ready-to-read console.table. Stages that have
- * no wasm path yet (layout, fields, ao, colorize, decor…) act as the
+ * no wasm path yet (layout, fields, colorize, decor…) act as the
  * control group — their deltas should be noise.
  */
 export async function pipelineBench(runs = 3): Promise<{

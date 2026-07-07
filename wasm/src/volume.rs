@@ -30,7 +30,7 @@ pub const BLOCK_MIXED: u8 = 2;
 /// negative halves: JS rounds half toward +inf). The marched sample indices
 /// are clamped to [0, n-1] afterwards, so this is exact.
 #[inline(always)]
-fn js_round(x: f64) -> f64 {
+pub(crate) fn js_round(x: f64) -> f64 {
     (x + 0.5).floor()
 }
 

@@ -209,6 +209,35 @@ export class VolumeResult {
 if (Symbol.dispose) VolumeResult.prototype[Symbol.dispose] = VolumeResult.prototype.free;
 
 /**
+ * Port of bakeAo(): one AO value per vertex (positions.len() / 3). Rays
+ * start just off the surface along the vertex normal, get bent mildly
+ * toward the normal, and march AO_RADII; the first solid hit adds its
+ * AO_HIT weight. ao = 1 - occ / 12.
+ * @param {Float32Array} positions
+ * @param {Float32Array} normals
+ * @param {Float32Array} data
+ * @param {number} nx
+ * @param {number} ny
+ * @param {number} nz
+ * @param {number} voxel
+ * @param {number} origin_x
+ * @param {number} origin_z
+ * @returns {Float32Array}
+ */
+export function bake_ao(positions, normals, data, nx, ny, nz, voxel, origin_x, origin_z) {
+    const ptr0 = passArrayF32ToWasm0(positions, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArrayF32ToWasm0(normals, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passArrayF32ToWasm0(data, wasm.__wbindgen_malloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ret = wasm.bake_ao(ptr0, len0, ptr1, len1, ptr2, len2, nx, ny, nz, voxel, origin_x, origin_z);
+    var v4 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+    return v4;
+}
+
+/**
  * Port of buildDensityVolume() minus carve-op SDF evaluation (ops stay in
  * JS); op bounds are still consumed here to force affected blocks MIXED.
  *

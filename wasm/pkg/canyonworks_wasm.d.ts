@@ -46,6 +46,14 @@ export class VolumeResult {
 }
 
 /**
+ * Port of bakeAo(): one AO value per vertex (positions.len() / 3). Rays
+ * start just off the surface along the vertex normal, get bent mildly
+ * toward the normal, and march AO_RADII; the first solid hit adds its
+ * AO_HIT weight. ao = 1 - occ / 12.
+ */
+export function bake_ao(positions: Float32Array, normals: Float32Array, data: Float32Array, nx: number, ny: number, nz: number, voxel: number, origin_x: number, origin_z: number): Float32Array;
+
+/**
  * Port of buildDensityVolume() minus carve-op SDF evaluation (ops stay in
  * JS); op bounds are still consumed here to force affected blocks MIXED.
  *
@@ -71,6 +79,7 @@ export interface InitOutput {
     readonly __wbg_netsresult_free: (a: number, b: number) => void;
     readonly __wbg_noisekit_free: (a: number, b: number) => void;
     readonly __wbg_volumeresult_free: (a: number, b: number) => void;
+    readonly bake_ao: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number];
     readonly fill_volume: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number) => number;
     readonly netsresult_indices: (a: number) => [number, number];
     readonly netsresult_positions: (a: number) => [number, number];

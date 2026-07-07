@@ -97,6 +97,46 @@ export function buildNets(vol: DensityVolume, params: GenParams): NetsResult {
   return nets;
 }
 
+/**
+ * AO-bake dispatcher (stage 4): wasm attempt only — returns null when
+ * `params.wasmGen === false` or the module hasn't finished loading, and the
+ * CALLER falls back to the pure-JS computeAoJs in ./mesher (the fallback
+ * lives there, not here, so this module never imports the mesher — that
+ * would be an import cycle). The JS path is timed by the mesher's aoBake
+ * perf mark; only the wasm path logs here.
+ */
+export function tryWasmAo(
+  positions: Float32Array,
+  normals: Float32Array,
+  data: Float32Array,
+  nx: number,
+  ny: number,
+  nz: number,
+  voxel: number,
+  originX: number,
+  originZ: number,
+  params: GenParams,
+): Float32Array | null {
+  if (params.wasmGen === false || wasmModule === null) return null;
+  const t0 = performance.now();
+  // generated .d.ts may lag bake_ao — cast through `any` at this one call,
+  // same pattern as fill_volume/surface_nets above
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const ao = (wasmModule as any).bake_ao(
+    positions,
+    normals,
+    data,
+    nx >>> 0,
+    ny >>> 0,
+    nz >>> 0,
+    voxel,
+    originX,
+    originZ,
+  ) as Float32Array;
+  console.debug(`[wasm-ao] bake ${(performance.now() - t0).toFixed(1)}ms (wasm)`);
+  return ao;
+}
+
 /** PARAMS vector order — MUST match wasm/src/volume.rs exactly (see ABI spec). */
 function flattenParams(params: GenParams): Float64Array {
   return new Float64Array([

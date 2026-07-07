@@ -5,7 +5,7 @@ import type { Fields } from './fields';
 import type { GenParams } from './params';
 import type { CarveOp } from './carves';
 import { BLOCK, type DensityVolume } from './volume';
-import { buildNets, buildVolume } from './volumeWasm';
+import { buildNets, buildVolume, tryWasmAo } from './volumeWasm';
 
 export interface TerrainResult {
   geometry: THREE.BufferGeometry;
@@ -40,7 +40,11 @@ export function buildTerrainGeometry(
   geometry.computeVertexNormals();
   perfMark('normals');
 
-  bakeAo(geometry, data, nx, ny, nz, voxel, originX, originZ);
+  const nrm = (geometry.getAttribute('normal') as THREE.BufferAttribute).array as Float32Array;
+  const aoArr =
+    tryWasmAo(nets.positions, nrm, data, nx, ny, nz, voxel, originX, originZ, params) ??
+    computeAoJs(nets.positions, nrm, data, nx, ny, nz, voxel, originX, originZ);
+  geometry.setAttribute('ao', new THREE.BufferAttribute(aoArr, 1));
   perfMark('aoBake');
   colorize(geometry, fields, params, noise, vol);
   perfMark('colorize');
@@ -85,11 +89,15 @@ const AO_HIT = [1.0, 0.7, 0.45, 0.25];
 /**
  * Per-vertex AO sampled straight from the density volume: short rays fanned
  * around the vertex normal, first solid hit occludes by distance weight.
- * Stored as an `ao` attribute; applied in the shader by a live uniform, so
- * the amount slider needs no rebake.
+ * Pure JS fallback for the wasm `bake_ao` (dispatched via tryWasmAo in
+ * ./volumeWasm); the result is stored as an `ao` attribute at the call site
+ * and applied in the shader by a live uniform, so the amount slider needs
+ * no rebake. Reads the raw Float32Arrays — identical values to the old
+ * BufferAttribute getters (attribute .array IS the raw Float32Array).
  */
-function bakeAo(
-  geometry: THREE.BufferGeometry,
+export function computeAoJs(
+  positions: Float32Array,
+  normals: Float32Array,
   data: Float32Array,
   nx: number,
   ny: number,
@@ -97,10 +105,8 @@ function bakeAo(
   voxel: number,
   originX: number,
   originZ: number,
-): void {
-  const pos = geometry.getAttribute('position') as THREE.BufferAttribute;
-  const nrm = geometry.getAttribute('normal') as THREE.BufferAttribute;
-  const count = pos.count;
+): Float32Array {
+  const count = positions.length / 3;
   const ao = new Float32Array(count);
   const inv = 1 / voxel;
 
@@ -115,13 +121,13 @@ function bakeAo(
   };
 
   for (let i = 0; i < count; i++) {
-    const vnx = nrm.getX(i);
-    const vny = nrm.getY(i);
-    const vnz = nrm.getZ(i);
+    const vnx = normals[i * 3];
+    const vny = normals[i * 3 + 1];
+    const vnz = normals[i * 3 + 2];
     // start just off the surface so rays don't self-intersect
-    const px = pos.getX(i) + vnx * voxel * 0.8;
-    const py = pos.getY(i) + vny * voxel * 0.8;
-    const pz = pos.getZ(i) + vnz * voxel * 0.8;
+    const px = positions[i * 3] + vnx * voxel * 0.8;
+    const py = positions[i * 3 + 1] + vny * voxel * 0.8;
+    const pz = positions[i * 3 + 2] + vnz * voxel * 0.8;
 
     let occ = 0;
     for (const d of AO_DIRS) {
@@ -144,7 +150,7 @@ function bakeAo(
     ao[i] = 1 - occ / AO_DIRS.length;
   }
 
-  geometry.setAttribute('ao', new THREE.BufferAttribute(ao, 1));
+  return ao;
 }
 
 // ---- Sedona palette -------------------------------------------------------

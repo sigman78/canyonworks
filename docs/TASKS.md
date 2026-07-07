@@ -241,13 +241,14 @@
       LTO), npm run wasm:build/wasm:dev, pkg/ committed (no Rust in CI)
 - [x] Bit-exact noise port (mulberry32 + simplex-noise 4.0.3 + fbm/
       ridged) — parity 0.0; bench harness __cwWasm (1.5× scalar baseline)
-- [ ] Port buildDensityVolume fill: fields → flat arrays across the
-      boundary (or port fields too), zero-copy Float32Array views,
-      one crossing per regenerate
+- [x] buildDensityVolume port (fill_volume): byte-identical parity on
+      test seeds incl. carve ops (JS post-pass) + wash; fill ~1.3-1.4×,
+      regen ~12%; wasmGen param (default on) + JS fallback dispatcher
 - [ ] SIMD batch evaluation (4-wide v128 noise) and/or f32 kernels —
       the structural speedups the scalar port can't reach
 - [ ] Surface nets port; then AO bake (26-dir probes are the most
-      SIMD/thread-friendly kernel we have)
+      SIMD/thread-friendly kernel we have); zero-copy views once the
+      consumers live wasm-side too
 - [ ] Optional: rayon threads behind wasm-bindgen-rayon + a
       coi-serviceworker shim for GH Pages (SharedArrayBuffer headers)
 

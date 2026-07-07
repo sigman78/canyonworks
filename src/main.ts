@@ -7,6 +7,7 @@ import { buildFields, computeObstructed, type Fields } from './gen/fields';
 import { generateLayout, largestComponent, type LayoutResult } from './gen/layout';
 import { buildTerrainGeometry } from './gen/mesher';
 import { defaultParams, defaultRenderOptions, type EditMode, type GenParams, type RenderOptions } from './gen/params';
+import { initWasmGen } from './gen/volumeWasm';
 import { BrushEditor } from './edit/editor';
 import { DECOR_PALETTE } from './gen/decor';
 import { TERRAIN_PALETTE } from './gen/mesher';
@@ -627,3 +628,6 @@ const app = new App();
 import('./core/wasmGen').then((m) => {
   (window as unknown as Record<string, unknown>).__cwWasm = m;
 });
+// kick off the wasm volume-fill kernel load, fire-and-forget: buildVolume()
+// falls back to JS until this resolves (or forever, if params.wasmGen is off)
+void initWasmGen();

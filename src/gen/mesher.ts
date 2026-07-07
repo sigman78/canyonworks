@@ -4,7 +4,8 @@ import type { Fields } from './fields';
 import type { GenParams } from './params';
 import type { CarveOp } from './carves';
 import { surfaceNets } from './surfacenets';
-import { BLOCK, buildDensityVolume, type DensityVolume } from './volume';
+import { BLOCK, type DensityVolume } from './volume';
+import { buildVolume } from './volumeWasm';
 
 export interface TerrainResult {
   geometry: THREE.BufferGeometry;
@@ -27,7 +28,7 @@ export function buildTerrainGeometry(
   ops: readonly CarveOp[] = [],
 ): TerrainResult {
   const t0 = performance.now();
-  const vol = buildDensityVolume(fields, params, noise, ops);
+  const vol = buildVolume(fields, params, noise, ops);
   const { data, nx, ny, nz, voxel, originX, originZ } = vol;
   const t1 = performance.now();
 

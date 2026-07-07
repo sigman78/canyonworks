@@ -36,6 +36,7 @@ export function buildPanel(
   fMap.add(params, 'cols', 12, 48, 1).onFinishChange(regen);
   fMap.add(params, 'rows', 12, 48, 1).onFinishChange(regen);
   fMap.add(params, 'voxelSize', 0.2, 0.6, 0.05).name('voxel size').onFinishChange(regen);
+  fMap.add(params, 'wasmGen').name('wasm gen').onFinishChange(regen);
 
   const fLayout = gui.addFolder('Canyon network');
   fLayout.add(params, 'junctions', 2, 9, 1).onFinishChange(regen);

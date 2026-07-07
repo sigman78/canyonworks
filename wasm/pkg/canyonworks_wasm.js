@@ -96,6 +96,118 @@ export class NoiseKit {
     }
 }
 if (Symbol.dispose) NoiseKit.prototype[Symbol.dispose] = NoiseKit.prototype.free;
+
+export class VolumeResult {
+    static __wrap(ptr) {
+        const obj = Object.create(VolumeResult.prototype);
+        obj.__wbg_ptr = ptr;
+        VolumeResultFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+    }
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        VolumeResultFinalization.unregister(this);
+        return ptr;
+    }
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_volumeresult_free(ptr, 0);
+    }
+    /**
+     * @returns {Uint8Array}
+     */
+    get block_type() {
+        const ret = wasm.volumeresult_block_type(this.__wbg_ptr);
+        var v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        return v1;
+    }
+    /**
+     * @returns {Float32Array}
+     */
+    get data() {
+        const ret = wasm.volumeresult_data(this.__wbg_ptr);
+        var v1 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
+    }
+    /**
+     * @returns {number}
+     */
+    get mixed_count() {
+        const ret = wasm.volumeresult_mixed_count(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * @returns {number}
+     */
+    get nbx() {
+        const ret = wasm.volumeresult_nbx(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * @returns {number}
+     */
+    get nby() {
+        const ret = wasm.volumeresult_nby(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * @returns {number}
+     */
+    get nbz() {
+        const ret = wasm.volumeresult_nbz(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * @returns {number}
+     */
+    get solid_count() {
+        const ret = wasm.volumeresult_solid_count(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+}
+if (Symbol.dispose) VolumeResult.prototype[Symbol.dispose] = VolumeResult.prototype.free;
+
+/**
+ * Port of buildDensityVolume() minus carve-op SDF evaluation (ops stay in
+ * JS); op bounds are still consumed here to force affected blocks MIXED.
+ *
+ * `params` layout (spec PARAMS order):
+ * 0 wallNoiseAmp, 1 wallNoiseFreq, 2 ledgeAmp, 3 terraceStep, 4 floorBase,
+ * 5 washAmp, 6 washHeight, 7 washCoverage, 8 washScale.
+ *
+ * `op_bounds` is 6 f64 per op: [minX, maxX, minY, maxY, minZ, maxZ].
+ * @param {number} seed
+ * @param {number} nx
+ * @param {number} ny
+ * @param {number} nz
+ * @param {number} voxel
+ * @param {number} origin_x
+ * @param {number} origin_z
+ * @param {Float32Array} ground_h
+ * @param {Float32Array} wall_mask
+ * @param {Float32Array} s2
+ * @param {Float64Array} params
+ * @param {Float64Array} op_bounds
+ * @param {boolean} force_all_mixed
+ * @returns {VolumeResult}
+ */
+export function fill_volume(seed, nx, ny, nz, voxel, origin_x, origin_z, ground_h, wall_mask, s2, params, op_bounds, force_all_mixed) {
+    const ptr0 = passArrayF32ToWasm0(ground_h, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArrayF32ToWasm0(wall_mask, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passArrayF32ToWasm0(s2, wasm.__wbindgen_malloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ptr3 = passArrayF64ToWasm0(params, wasm.__wbindgen_malloc);
+    const len3 = WASM_VECTOR_LEN;
+    const ptr4 = passArrayF64ToWasm0(op_bounds, wasm.__wbindgen_malloc);
+    const len4 = WASM_VECTOR_LEN;
+    const ret = wasm.fill_volume(seed, nx, ny, nz, voxel, origin_x, origin_z, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, force_all_mixed);
+    return VolumeResult.__wrap(ret);
+}
 function __wbg_get_imports() {
     const import0 = {
         __proto__: null,
@@ -121,10 +233,18 @@ function __wbg_get_imports() {
 const NoiseKitFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_noisekit_free(ptr, 1));
+const VolumeResultFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_volumeresult_free(ptr, 1));
 
 function getArrayF32FromWasm0(ptr, len) {
     ptr = ptr >>> 0;
     return getFloat32ArrayMemory0().subarray(ptr / 4, ptr / 4 + len);
+}
+
+function getArrayU8FromWasm0(ptr, len) {
+    ptr = ptr >>> 0;
+    return getUint8ArrayMemory0().subarray(ptr / 1, ptr / 1 + len);
 }
 
 let cachedFloat32ArrayMemory0 = null;
@@ -133,6 +253,14 @@ function getFloat32ArrayMemory0() {
         cachedFloat32ArrayMemory0 = new Float32Array(wasm.memory.buffer);
     }
     return cachedFloat32ArrayMemory0;
+}
+
+let cachedFloat64ArrayMemory0 = null;
+function getFloat64ArrayMemory0() {
+    if (cachedFloat64ArrayMemory0 === null || cachedFloat64ArrayMemory0.byteLength === 0) {
+        cachedFloat64ArrayMemory0 = new Float64Array(wasm.memory.buffer);
+    }
+    return cachedFloat64ArrayMemory0;
 }
 
 function getStringFromWasm0(ptr, len) {
@@ -145,6 +273,20 @@ function getUint8ArrayMemory0() {
         cachedUint8ArrayMemory0 = new Uint8Array(wasm.memory.buffer);
     }
     return cachedUint8ArrayMemory0;
+}
+
+function passArrayF32ToWasm0(arg, malloc) {
+    const ptr = malloc(arg.length * 4, 4) >>> 0;
+    getFloat32ArrayMemory0().set(arg, ptr / 4);
+    WASM_VECTOR_LEN = arg.length;
+    return ptr;
+}
+
+function passArrayF64ToWasm0(arg, malloc) {
+    const ptr = malloc(arg.length * 8, 8) >>> 0;
+    getFloat64ArrayMemory0().set(arg, ptr / 8);
+    WASM_VECTOR_LEN = arg.length;
+    return ptr;
 }
 
 let cachedTextDecoder = new TextDecoder('utf-8', { ignoreBOM: true, fatal: true });
@@ -161,12 +303,15 @@ function decodeText(ptr, len) {
     return cachedTextDecoder.decode(getUint8ArrayMemory0().subarray(ptr, ptr + len));
 }
 
+let WASM_VECTOR_LEN = 0;
+
 let wasmModule, wasmInstance, wasm;
 function __wbg_finalize_init(instance, module) {
     wasmInstance = instance;
     wasm = instance.exports;
     wasmModule = module;
     cachedFloat32ArrayMemory0 = null;
+    cachedFloat64ArrayMemory0 = null;
     cachedUint8ArrayMemory0 = null;
     wasm.__wbindgen_start();
     return wasm;

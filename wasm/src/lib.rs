@@ -6,6 +6,9 @@
 //! nets and AO bake here.
 
 mod noise;
+mod volume;
+
+pub use volume::{fill_volume, VolumeResult};
 
 use noise::{fbm2, fbm3, ridged2, Noise2, Noise3};
 use wasm_bindgen::prelude::*;

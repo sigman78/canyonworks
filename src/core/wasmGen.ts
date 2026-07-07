@@ -1,4 +1,7 @@
 import { fbm3, makeNoise } from './noise';
+import { placeCarveOps } from '../gen/carves';
+import { buildDensityVolume } from '../gen/volume';
+import { buildVolume, initWasmGen } from '../gen/volumeWasm';
 
 /**
  * WASM generator kernels (wasm/ crate, built by `npm run wasm:build`).
@@ -96,5 +99,73 @@ export async function bench(
     speedup: Math.round((jsMs / wasmMs) * 100) / 100,
     maxDiff,
     voxels: nx * ny * nz,
+  };
+}
+
+/**
+ * Volume-fill parity/bench: rebuilds the density volume both ways (JS
+ * `buildDensityVolume` vs the wasm `fill_volume` path + carve-op post-pass
+ * in `gen/volumeWasm.ts`) against the currently-running app's map, and
+ * diffs the results. Bit-identical is expected (maxDiff 0 / diffCount 0);
+ * a handful of diffs confined to wash columns is acceptable (see the ABI
+ * spec's hypot-ULP note) but must be reported, not hidden.
+ *
+ * Usage (dev console / Playwright): `await __cwWasm.volParity()`
+ */
+export async function volParity(): Promise<{
+  maxDiff: number;
+  diffCount: number;
+  blocksDiff: number;
+  jsMs: number;
+  wasmMs: number;
+  voxels: number;
+}> {
+  await initWasmGen();
+  // the running app instance (main.ts dev hook); fields/params/noise/grid
+  // are private on App but reachable here through `any`
+  const app = (window as unknown as { __cw?: unknown }).__cw as
+    | {
+        grid: Parameters<typeof placeCarveOps>[0];
+        fields: Parameters<typeof placeCarveOps>[1];
+        params: Parameters<typeof placeCarveOps>[2];
+        noise: Parameters<typeof placeCarveOps>[3];
+      }
+    | undefined;
+  if (!app) throw new Error('[wasm-vol] window.__cw not found — run inside the app');
+  const { grid, fields, params, noise } = app;
+  const ops = placeCarveOps(grid, fields, params, noise);
+
+  const t0 = performance.now();
+  const js = buildDensityVolume(fields, params, noise, ops);
+  const jsMs = performance.now() - t0;
+
+  const t1 = performance.now();
+  const wasm = buildVolume(fields, { ...params, wasmGen: true }, noise, ops);
+  const wasmMs = performance.now() - t1;
+
+  let maxDiff = 0;
+  let diffCount = 0;
+  const n = Math.min(js.data.length, wasm.data.length);
+  for (let i = 0; i < n; i++) {
+    const d = Math.abs(js.data[i] - wasm.data[i]);
+    if (d > 1e-6) {
+      diffCount++;
+      if (d > maxDiff) maxDiff = d;
+    }
+  }
+
+  let blocksDiff = 0;
+  const nb = Math.min(js.blockType.length, wasm.blockType.length);
+  for (let i = 0; i < nb; i++) {
+    if (js.blockType[i] !== wasm.blockType[i]) blocksDiff++;
+  }
+
+  return {
+    maxDiff,
+    diffCount,
+    blocksDiff,
+    jsMs: Math.round(jsMs * 10) / 10,
+    wasmMs: Math.round(wasmMs * 10) / 10,
+    voxels: n,
   };
 }

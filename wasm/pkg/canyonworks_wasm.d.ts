@@ -24,11 +24,38 @@ export class NoiseKit {
     ridged2(x: number, y: number, octaves: number): number;
 }
 
+export class VolumeResult {
+    private constructor();
+    free(): void;
+    [Symbol.dispose](): void;
+    readonly block_type: Uint8Array;
+    readonly data: Float32Array;
+    readonly mixed_count: number;
+    readonly nbx: number;
+    readonly nby: number;
+    readonly nbz: number;
+    readonly solid_count: number;
+}
+
+/**
+ * Port of buildDensityVolume() minus carve-op SDF evaluation (ops stay in
+ * JS); op bounds are still consumed here to force affected blocks MIXED.
+ *
+ * `params` layout (spec PARAMS order):
+ * 0 wallNoiseAmp, 1 wallNoiseFreq, 2 ledgeAmp, 3 terraceStep, 4 floorBase,
+ * 5 washAmp, 6 washHeight, 7 washCoverage, 8 washScale.
+ *
+ * `op_bounds` is 6 f64 per op: [minX, maxX, minY, maxY, minZ, maxZ].
+ */
+export function fill_volume(seed: number, nx: number, ny: number, nz: number, voxel: number, origin_x: number, origin_z: number, ground_h: Float32Array, wall_mask: Float32Array, s2: Float32Array, params: Float64Array, op_bounds: Float64Array, force_all_mixed: boolean): VolumeResult;
+
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly __wbg_noisekit_free: (a: number, b: number) => void;
+    readonly __wbg_volumeresult_free: (a: number, b: number) => void;
+    readonly fill_volume: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number) => number;
     readonly noisekit_fbm2: (a: number, b: number, c: number, d: number) => number;
     readonly noisekit_fbm3: (a: number, b: number, c: number, d: number, e: number) => number;
     readonly noisekit_fill_fbm3: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];
@@ -36,7 +63,15 @@ export interface InitOutput {
     readonly noisekit_noise2: (a: number, b: number, c: number) => number;
     readonly noisekit_noise3: (a: number, b: number, c: number, d: number) => number;
     readonly noisekit_ridged2: (a: number, b: number, c: number, d: number) => number;
+    readonly volumeresult_block_type: (a: number) => [number, number];
+    readonly volumeresult_data: (a: number) => [number, number];
+    readonly volumeresult_mixed_count: (a: number) => number;
+    readonly volumeresult_nbx: (a: number) => number;
+    readonly volumeresult_nby: (a: number) => number;
+    readonly volumeresult_nbz: (a: number) => number;
+    readonly volumeresult_solid_count: (a: number) => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;
+    readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_free: (a: number, b: number, c: number) => void;
     readonly __wbindgen_start: () => void;
 }

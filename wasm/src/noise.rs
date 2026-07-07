@@ -259,6 +259,21 @@ pub fn fbm3(n: &Noise3, x: f64, y: f64, z: f64, octaves: u32) -> f64 {
     sum / norm
 }
 
+/// core/noise.ts `smoothstep(a, b, x)`: t = clamp01((x-a)/(b-a)); t*t*(3-2t).
+/// clamp01 written out branch-for-branch to match the JS ternary exactly
+/// (NaN passes through both comparisons and returns NaN, same as JS).
+pub fn smoothstep(a: f64, b: f64, x: f64) -> f64 {
+    let v = (x - a) / (b - a);
+    let t = if v < 0.0 {
+        0.0
+    } else if v > 1.0 {
+        1.0
+    } else {
+        v
+    };
+    t * t * (3.0 - 2.0 * t)
+}
+
 pub fn ridged2(n: &Noise2, x: f64, y: f64, octaves: u32) -> f64 {
     let mut amp = 0.5;
     let mut freq = 1.0;

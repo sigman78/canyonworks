@@ -1,5 +1,42 @@
 # Worklog
 
+## 2026-07-06 — WASM volume fill (feature/wasm-gen, stage 2)
+
+buildDensityVolume ported to Rust (`wasm/src/volume.rs`, `fill_volume`),
+built by two parallel subagents against a pinned ABI spec (params as a
+fixed-order f64 vector, fields as the flat Float32Arrays they already
+are, ops as bounds-only) — the TS and Rust sides never touched each
+other's files and integrated on first build.
+
+Design calls:
+- **Carve-op SDFs stay in JS.** The op closures capture placement
+  geometry; rather than refactor carves.ts, the wasm fill only FORCES
+  op blocks MIXED (bounds math), and a TS post-pass replays the ops
+  over exactly those blocks in the same per-voxel order. Ops chain on
+  top of the base density, so this is arithmetically identical — one
+  nuance: the post-pass applies ops over the f32-rounded base rather
+  than the f64 intermediate, theoretically a sub-ULP difference where
+  an op SDF ties the base within f32 epsilon. Not observed (parity 0).
+- **One copy per boundary crossing** (inputs in, data/blockType out,
+  ~4 MB, ~2 ms) — zero-copy views deferred until surface nets moves
+  into wasm too.
+- Dispatcher `buildVolume()` (gen/volumeWasm.ts): wasm when
+  `params.wasmGen` (new, default true, "wasm gen" checkbox in Map)
+  AND the module is ready; JS fallback otherwise (also covers the
+  module still loading during the first regenerate, older browsers,
+  file:// contexts). `[wasm-vol]` debug line names the backend.
+- JS Math.round ported as (x+0.5).floor (exact); f64::hypot ULP risk
+  in the pierce guard documented — did not materialize.
+
+Verified in-browser (`__cwWasm.volParity()`): **byte-identical on both
+test seeds** — maxDiff 0, diffCount 0, blockType diff 0, over ~1.06M
+and ~1.13M voxels WITH live carve ops (5 arches + windows) and wash.
+Timing: volume fill 104 -> 73 ms and 110 -> 86 ms (~1.3-1.4×, scalar
+port + boundary copies); full regenerate 365 -> 322 ms (~12% — the
+fill is ~30% of regen). Consistent with the stage-1 baseline: the
+remaining wins are structural — SIMD batch noise, surface nets + AO
+bake in wasm (AO is the most parallel kernel), zero-copy views.
+
 ## 2026-07-06 — WASM generator scaffold (feature/wasm-gen, stacked on texture-set-v2)
 
 User: move the generator to WASM for higher-level array-processing

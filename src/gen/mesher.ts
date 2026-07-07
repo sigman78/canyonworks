@@ -1,10 +1,14 @@
 import * as THREE from 'three';
 import { clamp01, fbm2, fbm3, ridged2, smoothstep, type NoiseKit } from '../core/noise';
+import { lastPerf, perfMark, perfSpan } from '../core/perf';
 import type { Fields } from './fields';
 import type { GenParams } from './params';
 import type { CarveOp } from './carves';
-import { surfaceNets } from './surfacenets';
 import { BLOCK, buildDensityVolume, type DensityVolume } from './volume';
+import { surfaceNets } from './surfacenets';
+import { tryWasmGenerateMesh, type PaletteSpec } from './volumeWasm';
+
+export type { PaletteSpec, Rgb } from './volumeWasm';
 
 export interface TerrainResult {
   geometry: THREE.BufferGeometry;
@@ -26,40 +30,115 @@ export function buildTerrainGeometry(
   noise: NoiseKit,
   ops: readonly CarveOp[] = [],
 ): TerrainResult {
-  const t0 = performance.now();
+  // wasm-first: the fused generate_mesh runs the whole fill -> carve ops ->
+  // nets -> normals -> AO -> colorize chain in ONE boundary crossing; on
+  // any failure (wasmGen off, module not ready, wasm exception) the full
+  // per-stage chain below is the fallback
+  const wasmOut = tryWasmGenerateMesh(fields, params, ops, paletteSpec());
+  if (wasmOut) {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(wasmOut.positions, 3));
+    geometry.setIndex(new THREE.BufferAttribute(wasmOut.indices, 1));
+    geometry.setAttribute('normal', new THREE.BufferAttribute(wasmOut.normals, 3));
+    geometry.setAttribute('ao', new THREE.BufferAttribute(wasmOut.ao, 1));
+    geometry.setAttribute('color', new THREE.BufferAttribute(wasmOut.colors, 3));
+    geometry.setAttribute('facies', new THREE.BufferAttribute(wasmOut.facies, 3));
+    perfSpan({
+      volumeFill: wasmOut.stageMs[0],
+      surfaceNets: wasmOut.stageMs[1],
+      normals: wasmOut.stageMs[2],
+      aoBake: wasmOut.stageMs[3],
+      colorize: wasmOut.stageMs[4],
+    });
+    // ny for the HUD voxel stats — replicate wasm volume_ny (pipeline.rs)
+    // in the SAME f32 arithmetic (Math.fround), so voxRawKb matches the
+    // volume the wasm side actually allocated instead of drifting by one
+    // nx*nz slab near a ceil boundary
+    const ny =
+      Math.ceil(Math.fround(Math.fround(Math.fround(fields.maxH) + 1) / Math.fround(fields.voxel))) + 1;
+    return terrainResult(
+      geometry,
+      wasmOut.positions,
+      wasmOut.indices,
+      fields.nx,
+      ny,
+      fields.nz,
+      wasmOut.nbx * wasmOut.nby * wasmOut.nbz,
+      wasmOut.mixedCount,
+      wasmOut.solidCount,
+    );
+  }
+
+  // pure-JS chain (the wasmGen=false fallback AND the regression reference —
+  // meshCompare in core/wasmGen.ts replays exactly these stages)
   const vol = buildDensityVolume(fields, params, noise, ops);
   const { data, nx, ny, nz, voxel, originX, originZ } = vol;
-  const t1 = performance.now();
+  perfMark('volumeFill');
 
   const nets = surfaceNets(data, nx, ny, nz, voxel, originX, 0, originZ, vol);
-  const t2 = performance.now();
+  perfMark('surfaceNets');
 
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(nets.positions, 3));
   geometry.setIndex(new THREE.BufferAttribute(nets.indices, 1));
   geometry.computeVertexNormals();
+  perfMark('normals');
 
-  bakeAo(geometry, data, nx, ny, nz, voxel, originX, originZ);
-  const t3 = performance.now();
-  colorize(geometry, fields, params, noise, vol);
-  const t4 = performance.now();
+  const nrm = (geometry.getAttribute('normal') as THREE.BufferAttribute).array as Float32Array;
+  const aoArr = computeAoJs(nets.positions, nrm, data, nx, ny, nz, voxel, originX, originZ);
+  geometry.setAttribute('ao', new THREE.BufferAttribute(aoArr, 1));
+  perfMark('aoBake');
+  const col = colorizeJs(nets.positions, nrm, fields, params, noise, vol);
+  geometry.setAttribute('color', new THREE.BufferAttribute(col.colors, 3));
+  geometry.setAttribute('facies', new THREE.BufferAttribute(col.facies, 3));
+  perfMark('colorize');
 
-  const nBlocks = vol.nbx * vol.nby * vol.nbz;
+  return terrainResult(
+    geometry,
+    nets.positions,
+    nets.indices,
+    nx,
+    ny,
+    nz,
+    vol.nbx * vol.nby * vol.nbz,
+    vol.mixedCount,
+    vol.solidCount,
+  );
+}
+
+/**
+ * Shared tail of both mesh paths: the `[mesher]` summary line (stage times
+ * read from lastPerf — perfMark fills them on the JS path, perfSpan on the
+ * wasm path) and the TerrainResult stats.
+ */
+function terrainResult(
+  geometry: THREE.BufferGeometry,
+  positions: Float32Array,
+  indices: Uint32Array,
+  nx: number,
+  ny: number,
+  nz: number,
+  nBlocks: number,
+  mixedCount: number,
+  solidCount: number,
+): TerrainResult {
   console.debug(
     `[mesher] ${nx}x${ny}x${nz} vox, blocks ${nBlocks} ` +
-      `(mixed ${vol.mixedCount} = ${Math.round((vol.mixedCount / nBlocks) * 100)}%, ` +
-      `solid ${vol.solidCount}) | fill ${(t1 - t0).toFixed(1)}ms, ` +
-      `nets ${(t2 - t1).toFixed(1)}ms, normals+ao ${(t3 - t2).toFixed(1)}ms, ` +
-      `color ${(t4 - t3).toFixed(1)}ms`,
+      `(mixed ${mixedCount} = ${Math.round((mixedCount / nBlocks) * 100)}%, ` +
+      `solid ${solidCount}) | fill ${(lastPerf.volumeFill ?? 0).toFixed(1)}ms, ` +
+      `nets ${(lastPerf.surfaceNets ?? 0).toFixed(1)}ms, ` +
+      `normals ${(lastPerf.normals ?? 0).toFixed(1)}ms, ` +
+      `ao ${(lastPerf.aoBake ?? 0).toFixed(1)}ms, ` +
+      `color ${(lastPerf.colorize ?? 0).toFixed(1)}ms`,
   );
 
   return {
     geometry,
-    vertexCount: nets.positions.length / 3,
-    triangleCount: nets.indices.length / 3,
+    vertexCount: positions.length / 3,
+    triangleCount: indices.length / 3,
     voxRawKb: Math.round((nx * ny * nz * 4) / 1024),
     // mixed blocks store voxels; homogeneous ones just their type byte
-    voxSparseKb: Math.round((vol.mixedCount * BLOCK * BLOCK * BLOCK * 4 + nBlocks) / 1024),
+    voxSparseKb: Math.round((mixedCount * BLOCK * BLOCK * BLOCK * 4 + nBlocks) / 1024),
   };
 }
 
@@ -82,11 +161,15 @@ const AO_HIT = [1.0, 0.7, 0.45, 0.25];
 /**
  * Per-vertex AO sampled straight from the density volume: short rays fanned
  * around the vertex normal, first solid hit occludes by distance weight.
- * Stored as an `ao` attribute; applied in the shader by a live uniform, so
- * the amount slider needs no rebake.
+ * Pure JS fallback for the wasm AO stage inside generate_mesh; the result
+ * is stored as an `ao` attribute at the call site
+ * and applied in the shader by a live uniform, so the amount slider needs
+ * no rebake. Reads the raw Float32Arrays — identical values to the old
+ * BufferAttribute getters (attribute .array IS the raw Float32Array).
  */
-function bakeAo(
-  geometry: THREE.BufferGeometry,
+export function computeAoJs(
+  positions: Float32Array,
+  normals: Float32Array,
   data: Float32Array,
   nx: number,
   ny: number,
@@ -94,10 +177,8 @@ function bakeAo(
   voxel: number,
   originX: number,
   originZ: number,
-): void {
-  const pos = geometry.getAttribute('position') as THREE.BufferAttribute;
-  const nrm = geometry.getAttribute('normal') as THREE.BufferAttribute;
-  const count = pos.count;
+): Float32Array {
+  const count = positions.length / 3;
   const ao = new Float32Array(count);
   const inv = 1 / voxel;
 
@@ -112,13 +193,13 @@ function bakeAo(
   };
 
   for (let i = 0; i < count; i++) {
-    const vnx = nrm.getX(i);
-    const vny = nrm.getY(i);
-    const vnz = nrm.getZ(i);
+    const vnx = normals[i * 3];
+    const vny = normals[i * 3 + 1];
+    const vnz = normals[i * 3 + 2];
     // start just off the surface so rays don't self-intersect
-    const px = pos.getX(i) + vnx * voxel * 0.8;
-    const py = pos.getY(i) + vny * voxel * 0.8;
-    const pz = pos.getZ(i) + vnz * voxel * 0.8;
+    const px = positions[i * 3] + vnx * voxel * 0.8;
+    const py = positions[i * 3 + 1] + vny * voxel * 0.8;
+    const pz = positions[i * 3 + 2] + vnz * voxel * 0.8;
 
     let occ = 0;
     for (const d of AO_DIRS) {
@@ -141,7 +222,7 @@ function bakeAo(
     ao[i] = 1 - occ / AO_DIRS.length;
   }
 
-  geometry.setAttribute('ao', new THREE.BufferAttribute(ao, 1));
+  return ao;
 }
 
 // ---- Sedona palette -------------------------------------------------------
@@ -149,9 +230,11 @@ function bakeAo(
 const C = (hex: number) => new THREE.Color(hex);
 
 /**
- * Sedona palette, baked into vertex colors by colorize(). EXPORTED LIVE
- * OBJECTS: the Palette panel (ui/palettePanel.ts) mutates these Colors
- * and triggers a regenerate — colorize() reads them fresh each run.
+ * Sedona palette, baked into vertex colors by colorizeJs() / the wasm
+ * colorize. EXPORTED LIVE OBJECTS: the Palette panel (ui/palettePanel.ts)
+ * mutates these Colors and triggers a regenerate — colorizeJs() reads them
+ * fresh each run, and paletteSpec() re-snapshots them per call for the
+ * wasm path (never baked into the module).
  */
 export const TERRAIN_PALETTE = {
   /** cliff strata bands, bottom to top */
@@ -180,16 +263,48 @@ const EJECTA = TERRAIN_PALETTE.ejecta;
 const CRACK_DEEP = TERRAIN_PALETTE.crackDeep;
 const CRACK_LIP = TERRAIN_PALETTE.crackLip;
 
-function colorize(
-  geometry: THREE.BufferGeometry,
+/**
+ * TERRAIN_PALETTE as plain serializable {r, g, b} objects for the fused
+ * wasm generate_mesh (serde-decoded by wasm/src/params.rs `Palette`).
+ * Rebuilt PER CALL and never cached: TERRAIN_PALETTE holds live THREE.Color
+ * objects the Palette panel mutates between regenerates. Lives here (not in
+ * volumeWasm) because volumeWasm importing this module would close an
+ * import cycle — the call site hands the spec in.
+ */
+export function paletteSpec(): PaletteSpec {
+  const rgb = (c: THREE.Color) => ({ r: c.r, g: c.g, b: c.b });
+  return {
+    strata: STRATA.map(rgb),
+    floorA: rgb(FLOOR_A),
+    floorB: rgb(FLOOR_B),
+    cap: rgb(CAP),
+    crevice: rgb(CREVICE),
+    craterIn: rgb(CRATER_IN),
+    craterWall: rgb(CRATER_WALL),
+    craterRim: rgb(CRATER_RIM),
+    ejecta: rgb(EJECTA),
+    crackDeep: rgb(CRACK_DEEP),
+    crackLip: rgb(CRACK_LIP),
+  };
+}
+
+/**
+ * Vertex colorize: Sedona palette baked into vertex colors + the 3-channel
+ * `facies` morphology attribute. Pure JS fallback for the wasm colorize
+ * stage inside generate_mesh; the caller stores the returned arrays as the
+ * 'color' and 'facies' attributes. Reads the raw Float32Arrays — identical
+ * values to the old BufferAttribute getters (attribute .array IS the raw
+ * Float32Array).
+ */
+export function colorizeJs(
+  positions: Float32Array,
+  normals: Float32Array,
   fields: Fields,
   params: GenParams,
   noise: NoiseKit,
   vol: DensityVolume,
-): void {
-  const pos = geometry.getAttribute('position') as THREE.BufferAttribute;
-  const nrm = geometry.getAttribute('normal') as THREE.BufferAttribute;
-  const count = pos.count;
+): { colors: Float32Array; facies: Float32Array } {
+  const count = positions.length / 3;
   const colors = new Float32Array(count * 3);
 
   // rock-overhead probe (grotto/notch interiors): vertical samples into the
@@ -215,10 +330,10 @@ function colorize(
   const strataStep = Math.max(0.4, params.terraceStep);
 
   for (let i = 0; i < count; i++) {
-    const x = pos.getX(i);
-    const y = pos.getY(i);
-    const z = pos.getZ(i);
-    const nY = nrm.getY(i);
+    const x = positions[i * 3];
+    const y = positions[i * 3 + 1];
+    const z = positions[i * 3 + 2];
+    const nY = normals[i * 3 + 1];
     const s2 = fields.sampleS2(x, z);
 
     const dither = fbm3(noise.n3, x * 0.35, y * 0.5, z * 0.35, 2);
@@ -290,9 +405,9 @@ function colorize(
     // classified as bright sand floor, which pops inside a shadowed wall
     // base and reads like light leaking through the rock.
     {
-      const px = x + nrm.getX(i) * vol.voxel * 0.8;
+      const px = x + normals[i * 3] * vol.voxel * 0.8;
       const py = y + nY * vol.voxel * 0.8;
-      const pz = z + nrm.getZ(i) * vol.voxel * 0.8;
+      const pz = z + normals[i * 3 + 2] * vol.voxel * 0.8;
       let hits = 0;
       for (const s of CAVE_STEPS) {
         if (solidAbove(px, py + s, pz)) hits++;
@@ -317,8 +432,7 @@ function colorize(
     colors[i * 3 + 2] = tmp.b;
   }
 
-  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-  geometry.setAttribute('facies', new THREE.BufferAttribute(facies, 3));
+  return { colors, facies };
 }
 
 /**

@@ -1,0 +1,37 @@
+/* tslint:disable */
+/* eslint-disable */
+export const memory: WebAssembly.Memory;
+export const __wbg_fieldsprofileresult_free: (a: number, b: number) => void;
+export const __wbg_meshresult_free: (a: number, b: number) => void;
+export const __wbg_noisekit_free: (a: number, b: number) => void;
+export const fields_profile: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: any) => [number, number, number];
+export const fieldsprofileresult_crater_d: (a: number) => any;
+export const fieldsprofileresult_ground_h: (a: number) => any;
+export const fieldsprofileresult_max_h: (a: number) => number;
+export const fieldsprofileresult_wall_mask: (a: number) => any;
+export const generate_mesh: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: any, r: any, s: any, t: number) => [number, number, number];
+export const meshresult_ao: (a: number) => any;
+export const meshresult_colors: (a: number) => any;
+export const meshresult_facies: (a: number) => any;
+export const meshresult_indices: (a: number) => any;
+export const meshresult_mixed_count: (a: number) => number;
+export const meshresult_nbx: (a: number) => number;
+export const meshresult_nby: (a: number) => number;
+export const meshresult_nbz: (a: number) => number;
+export const meshresult_normals: (a: number) => any;
+export const meshresult_positions: (a: number) => any;
+export const meshresult_solid_count: (a: number) => number;
+export const meshresult_stage_ms: (a: number) => any;
+export const noisekit_fill_fbm3: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];
+export const noisekit_new: (a: number) => number;
+export const noisekit_noise2: (a: number, b: number, c: number) => number;
+export const noisekit_noise3: (a: number, b: number, c: number, d: number) => number;
+export const signed_distance: (a: number, b: number, c: number, d: number) => [number, number];
+export const __wbindgen_malloc: (a: number, b: number) => number;
+export const __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
+export const __wbindgen_exn_store: (a: number) => void;
+export const __externref_table_alloc: () => number;
+export const __wbindgen_externrefs: WebAssembly.Table;
+export const __externref_table_dealloc: (a: number) => void;
+export const __wbindgen_free: (a: number, b: number, c: number) => void;
+export const __wbindgen_start: () => void;

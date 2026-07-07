@@ -1,5 +1,354 @@
 # Worklog
 
+## 2026-07-07 — WASM compound signatures, scalars only at the fringe (feature/wasm-gen, gate 7)
+
+User: "move per component x,y,z signatures out of wasm data
+types/functions in favor of compound and leave the repacking job to
+the interface fringe" (fringe = the JS/TS-facing surface). Below the
+fringe no function or struct takes component scalars for one entity:
+the noise API samples points (`fbm2(n2, p * freq + vec2(31.7, -17.3),
+4)`; Noise2/Noise3 take Vec2/Vec3 with the abstract-domain naming note
+— ground-plane x/z map to the simplex's internal axes), Grid2 carries
+`n: Idx2` (new lattice twin of Vec2) with `at(Idx2)`/`world(Idx2)`,
+edt takes Idx2, volume/colorize helpers take Idx2/Idx3/Vec2/Vec3.
+The fringe (#[wasm_bindgen] exports + serde mirrors of TS objects)
+keeps scalar/flat shapes — JS ABI byte-frozen, verified against the
+regenerated .d.ts — and repacks in its first lines. Per-axis
+primitives (axis_cell_frac, block_span, axis_block_range) stay scalar
+by design: they are the one-axis formula being mapped.
+
+Hard gate held: ops-covering native bench checksums reproduced EXACTLY
+(scalar + parallel), independently re-verified by an adversarial
+review agent that also term-by-term checked every migrated noise call
+site against the TS reference — including lanes the bench workload
+doesn't cover (fissure notch etc). Zero warnings ×4 configs, tsc
+green, TS untouched.
+
+## 2026-07-07 — WASM axis-mapped math + vector groups (feature/wasm-gen, gate 6)
+
+User: "dimension duplicated math like ops.rs - bx, by, bz... is not
+good" / "replace scalar groups math with vector where deems good" —
+no formula hand-expanded three times with axis-letter suffixes.
+
+math.rs gains Idx3 (integer lattice triple) + Aabb (min/max Vec3) +
+Vec2::with_y. The six-scalar OpBounds died into Aabb; the padded
+bounds→blocks math exists ONCE (axis_block_range mapped over x/y/z,
+shared BY CONSTRUCTION between the fill's MIXED forcing and the carve
+post-pass); block/voxel linear-index spellings live only in
+VolDims::block_idx/idx(Idx3); Grid2/VolDims group origin: Vec2, n/nb:
+Idx3; the grid samplers' per-axis clamp/round/reject formulas are one
+fn each (axis_cell_frac/axis_nearest/axis_cell); Crater center is a
+Vec2. Loop NESTS stay explicit — visit orders are contracts, only
+their range/index math deduped. Judgment calls documented in code
+(e.g. cave-probe not grouped: +0.0 on a lane is not a bitwise identity
+at -0.0).
+
+Hard gate: this changed NO math — the native bench first gained
+deterministic synthetic carve ops (plug+vault+window, closing ops.rs's
+zero bench coverage; mixed blocks 8666→8842 proves they bite), then
+the refactor reproduced the reference checksums BYTE-FOR-BYTE (scalar
+AND parallel), independently re-verified by an adversarial review
+agent (all five attack vectors refuted). Browser: run-to-run bitwise
+deterministic; zero warnings ×4 cargo configs; JS ABI untouched.
+
+User: "RGB f64 is overkill... and vertices pos too" — kernel math moved
+f64 → f32 end-to-end (noise sampling, fields profile, volume density,
+carve SDFs, nets build buffer, normals, AO, colorize, math.rs types,
+grid samplers, GenParams/Palette fields). Audited keep-f64 whitelist,
+each spot with a WHY comment: EDT internals (integer-exact parabola
+math), GenParams.seed (JS ToUint32 needs 2^53 range), timer/stage_ms,
+boundary scalars (JS numbers arrive f64, narrowed ONCE at entry —
+serde decode is the single conversion point per the "transfer tax"
+rule), maxH promoted only in its getter. Mulberry32/perm tables stay
+integer-exact → noise lattice still seed-stable. JS ABI byte-for-byte
+unchanged; TS untouched.
+
+The byte-parity-with-JS contract is retired (was never the user's
+requirement). New bar, all verified: run-to-run determinism BITWISE;
+scalar vs parallel native checksums identical; on identical fields the
+f32 mesh chain differs from the f64 JS chain by 2 verts in 65k
+(0.003%); f32 fields shift each map subtly ONCE (same structure,
+bounds equal to 2e-7, playability stats identical — open 47% /
+playable 42% on the live seed; verified visually seed 59439). JS
+fallback is now "visually equivalent", not bitwise.
+
+Also (user: "why x < y { x = y } is not min(x,y)? thats wild miss") —
+reduction-idiom sweep: compare-and-assign → .min()/.max(), max_h loop
+→ fold(f32::max), ordered min/max chains → .clamp(), clamp01 →
+v.clamp(0.0, 1.0). Standing rule recorded: porting fidelity applies to
+math semantics, not JS statement shapes (js_round vs f32::round stays
+the documented exception).
+
+Perf: native bench 146.8 / 33.9 ms scalar/parallel (f32 ~6% faster
+than f64); browser total 206 ms. f32 also halves noise-table/scratch
+footprints and doubles future simd128 lane width (f32x4).
+
+## 2026-07-07 — WASM value types + DRY sweep (feature/wasm-gen, gate 4)
+
+User direction: on the wasm side, everything that IS one entity travels
+as one value (no more (x, y, z) scalar triples or flat i*3 indexing),
+and anything repeated more than once gets one home. TS side untouched.
+
+New wasm/src/math.rs: Vec3 / ground-plane Vec2 (x,z; y-up world) / Rgb
+— Copy f64 bundles with documented exactness contracts (three.js
+cross/normalize order, hypot-as-sqrt length, THREE.Color lerp form; no
+FMA anywhere, which is why it's local code and not glam). Every kernel
+now speaks structured buffers: `compute_normals(vertices: &[[f32;3]],
+indices) -> Vec<[f32;3]>` and the same shape for nets/ao/colorize
+(slice::as_chunks — zero-copy, no unsafe; flat Vec<f32> only at the
+wasm-bindgen boundary via into_flattened, JS ABI byte-for-byte
+unchanged). Grid samplers take points (bilinear(Vec2), solid(Vec3)).
+
+DRY: dome-swell + gully noise fields (were duplicated fields.rs ↔
+colorize.rs) → named fns in noise.rs; off-surface probe start (ao ↔
+cave probe) → VolDims::off_surface; serde decode+error-map → one
+generic params::from_js; seed-derivation constants → only in
+MapNoise::new (NoiseKit delegates); getter boilerplate → clone_getters!
+macro; the stage chain → ONE typed pipeline::mesh_chain used by both
+generate_mesh and the native bench; op-bounds→block math + ny formula
+deduped. Where grouping would REORDER f64 math (notch gradient hypot,
+nets centroid divide, off_surface multiply chain) the code stays scalar
+with a comment saying why.
+
+Verified: meshCompare 0 mismatches on both seeds; browser total
+210 ms (run noise vs 207); native bench 156.6 / 36.1 ms scalar/parallel
+(within noise of gate 3), identical checksums across backends.
+
+## 2026-07-07 — WASM structural refactor: typed boundary, fused pipeline, backend matrix (feature/wasm-gen)
+
+The "wasm for real" pass — goals: expressive/maintainable Rust side,
+one JS↔wasm roundtrip for the mesh, and a same-code scalar/SIMD/parallel
+backend experiment. Landed in three gates, each verified byte-identical
+in the browser (meshCompare: 0 mismatches on all six buffers, two seeds).
+
+Gate 1 — fusion. Carve-op SDFs (plug/vault/window) became serializable
+specs (`CarveShapeSpec` in carves.ts ↔ tagged serde enums in ops.rs) so
+the closures' math runs wasm-side; three.js computeVertexNormals ported
+(normals.rs, f32-roundtrip-exact); new `generate_mesh` runs fill → ops →
+nets → normals → AO → colorize in ONE crossing — the ~4 MB density
+volume stopped crossing the boundary (was 4× per regenerate). Mesher is
+wasm-first with the whole JS chain as the wasmGen=false fallback.
+
+Gate 2 — expressive rewrite behind the frozen boundary. All fixed-order
+f64 param vectors are DEAD: params/palette/ops cross as plain JS objects
+into serde-typed structs (GenParams/Palette mirror the TS objects,
+camelCase + defaults). Kernels rewritten as a typed Rust library:
+named per-cell/per-vertex functions (wall_density, wash_notch,
+crater_ring, cave_shade…) with design comments preserved, all sampling
+through shared grid.rs (Grid2 bilinear/nearest, VolDims solid probe),
+MapNoise built once per call (perm-table rebuilds gone), hot loops
+routed through par.rs (serial by default, rayon under
+`--features parallel`). wasm export surface is now exactly:
+generate_mesh, MeshResult, signed_distance, fields_profile,
+FieldsProfileResult, NoiseKit. Legacy per-stage exports, TS dispatchers,
+flatten* helpers and four copy-pasted parity harnesses deleted;
+meshCompare() replaces them.
+
+Gate 3 — backend matrix (same code, compiler switches only), via
+wasm/examples/bench_native.rs (synthetic 200×180 workload, kernels
+chain, identical checksums across variants):
+  browser wasm + simd128   207 ms total regenerate (1.75× vs JS 363)
+  browser wasm, no simd    211 ms — simd128 autovectorization ≈ 2%,
+                           i.e. nothing; these kernels are branchy
+                           scalar f64 — real SIMD needs explicit 4-wide
+                           batching (future)
+  native scalar            155 ms kernel chain
+  native --features parallel  35 ms (4.4×, 8 threads; fill 6.6×,
+                           ao 7.0×, profile 6.3×, colorize 6.1× —
+                           near-linear; nets sequential by design is
+                           the new bottleneck at 31%)
+Takeaway: the feature-flag parallelism is where the free performance
+is; browser threads (wasm-bindgen-rayon + COOP/COEP) would bring the
+4× to the app.
+
+Per-stage (browser, 4-run avg, wasm vs js): fields 20/30, volumeFill
+49/90 (ops now in Rust), surfaceNets 9.4/30 (volume no longer crosses),
+normals 1.8/12 (new port), aoBake 39/92, colorize 20/41. Architecture
+doc: docs/WASMGEN.md.
+
+Two fields kernels ported (`wasm/src/fields.rs`): the Felzenszwalb
+exact EDT (`signed_distance`, cell units — voxel scaling stays in the
+TS caller) and the per-column ground-profile loop (`fields_profile`:
+ridge/floor fbm, crater bowls/rims, talus, wall height + mesa offsets +
+doming, terracing with phase jitter, gullies, hex flattening, crack
+notches). Hex rasterization, RNG crater/crack placement, box blurs and
+mesa flood fill stay in TS (cheap, branchy, grid-coupled). Fields now
+also carries flattenW/flatRaw/mesaOff as parity-support intermediates.
+
+Parity: **all-zero on both seeds** — EDT exact, groundH/wallMask/
+craterD/maxH exact (cos/exp transcendentals matched V8 again). That is
+6/6 kernels byte-identical; per-seed reproducibility fully preserved
+through the whole wasm generator.
+
+Pipeline table (4-run avg, wasm vs js):
+  fields       32.6 -> 21.8 ms  (1.5×)
+  volumeFill   90.2 -> 62.3 ms  (1.45×)
+  surfaceNets  36.3 -> 13.7 ms  (2.65×)
+  aoBake       92.6 -> 39.0 ms  (2.37×)
+  colorize     42.0 -> 22.0 ms  (1.91×)
+  total       372   -> 238 ms   (1.57× end-to-end)
+Remaining JS: fogOverlays ~55 ms (three.js object building — not a
+wasm candidate), normals ~11 ms, decor/layout/carves ~12 ms. The
+generator math is now essentially all-wasm; further wins are
+structural (SIMD batch noise, threads) rather than more ports.
+
+## 2026-07-06 — WASM colorize (feature/wasm-gen, stage 5)
+
+colorize ported (`wasm/src/colorize.rs`): bilinear field samplers over
+the raw grids, nearest crater sampler, plateauWeight, all three color
+branches, cave-tint probe, crack shading. The palette (15 colors × 3)
+crosses the boundary PER CALL — the Palette panel mutates live Colors,
+so caching wasm-side would freeze user tweaks; mesher flattens it at
+the call site (also avoids a mesher↔volumeWasm import cycle).
+`tryWasmColorize(...) ?? colorizeJs(...)` dispatch like AO.
+
+Parity: **exactly 0 diffs on colors AND facies, both seeds** — the
+flagged sin/exp transcendental risk didn't materialize either (V8 and
+Rust libm agree on these input ranges; that's now 5 for 5 kernels
+byte-identical). Visual check: full-wasm regenerate renders correctly.
+
+Pipeline table (4-run avg, wasm vs js):
+  volumeFill   81.5 -> 61.9 ms  (1.32×)
+  surfaceNets  31.5 -> 13.9 ms  (2.27×)
+  aoBake       91.5 -> 38.5 ms  (2.38×)
+  colorize     36.9 -> 21.8 ms  (1.69×)
+  total       357   -> 243 ms   (1.47× end-to-end)
+(The "fields 1.32×" row is GC-coupling noise — fields has no wasm path
+yet; JS-mode runs carry more allocation pressure from the JS kernels.)
+Next: fields profile loop + EDT; fogOverlays (56 ms) is three.js
+object building — not a wasm candidate.
+
+## 2026-07-06 — WASM AO bake (feature/wasm-gen, stage 4)
+
+bakeAo ported (`wasm/src/ao.rs`, `bake_ao`): 12-ray fan (order-exact
+table build), 4-radius first-hit march, js_round probe lookups. JS side
+refactored to a pure `computeAoJs` (raw arrays, no THREE dependency) so
+the dispatch is `tryWasmAo(...) ?? computeAoJs(...)` at the mesher call
+site — volumeWasm never imports mesher (would cycle). The flagged
+Math.hypot-3-arg ULP risk did NOT materialize: **parity byte-identical
+on both seeds** (0 diffs over 65.6k / 76.8k verts).
+
+Pipeline table (4-run avg, wasm vs js):
+  volumeFill   81.4 -> 61.3 ms  (1.33×)
+  surfaceNets  23.3 -> 13.3 ms  (1.75×)
+  aoBake       87.7 -> 38.8 ms  (2.26×)
+  total       337   -> 254 ms   (regen ~25% faster end-to-end)
+Standalone aoParity: 92 -> 50 ms / 110 -> 45 ms. AO gains most so far —
+pure probe marching with zero allocation pressure suits wasm best.
+Remaining JS stages: colorize 38.5 (port next), fogOverlays 54.9
+(mostly three.js object building, poor wasm fit), fields 27.8.
+
+## 2026-07-06 — WASM surface nets + per-stage perf tracking (feature/wasm-gen, stage 3)
+
+surfaceNets ported to Rust (`wasm/src/nets.rs`, `surface_nets`) — takes
+the FINAL volume data (carve-op post-pass already applied), so it can't
+fuse with fill_volume until ops are ported; the ~4 MB data copy in is
+milliseconds. Exactness traps that mattered: JS builds positions in a
+number[] (f64) and rounds to f32 only at return, while the
+diagonal-split tie-break (diagSq) and the degenerate-triangle test read
+the UNROUNDED values — the Rust port builds in Vec<f64> the same way.
+Corner buffer stays f32 like the JS Float32Array. Parity: **byte-
+identical on both test seeds** — same vertex count, 0 position diffs,
+0 index diffs (65.6k / 76.8k verts).
+
+Per-stage perf tracking (user request — measure each JS→WASM
+replacement at its TS call site): `core/perf.ts` marks around every
+pipeline stage in regenerate/buildTerrainGeometry, `[perf]` debug line
+per regenerate, and `__cwWasm.pipelineBench(runs)` regenerates with
+wasmGen off/on and console.tables the comparison. No Rust-side
+instrumentation — call-site timing includes boundary copies, which is
+the honest number.
+
+Pipeline table (4-run avg, seed 59439):
+  volumeFill   82.5 -> 61.2 ms  (1.35×)  [wasm]
+  surfaceNets  30.3 -> 12.6 ms  (2.4×)   [wasm]
+  aoBake       88.6 ms   [next target — biggest JS stage left]
+  colorize     36.2 ms | fields 28.5 | fogOverlays 55.3 | normals 10.8
+  total        345 -> 307 ms
+Control stages (normals/colorize/ao/fog) hold at ~1.0× as expected.
+Nets beats fill on speedup because the JS version pays number[].push +
+GC churn, which Rust's Vec eliminates — allocation-bound stages gain
+more than compute-bound ones.
+
+## 2026-07-06 — WASM volume fill (feature/wasm-gen, stage 2)
+
+buildDensityVolume ported to Rust (`wasm/src/volume.rs`, `fill_volume`),
+built by two parallel subagents against a pinned ABI spec (params as a
+fixed-order f64 vector, fields as the flat Float32Arrays they already
+are, ops as bounds-only) — the TS and Rust sides never touched each
+other's files and integrated on first build.
+
+Design calls:
+- **Carve-op SDFs stay in JS.** The op closures capture placement
+  geometry; rather than refactor carves.ts, the wasm fill only FORCES
+  op blocks MIXED (bounds math), and a TS post-pass replays the ops
+  over exactly those blocks in the same per-voxel order. Ops chain on
+  top of the base density, so this is arithmetically identical — one
+  nuance: the post-pass applies ops over the f32-rounded base rather
+  than the f64 intermediate, theoretically a sub-ULP difference where
+  an op SDF ties the base within f32 epsilon. Not observed (parity 0).
+- **One copy per boundary crossing** (inputs in, data/blockType out,
+  ~4 MB, ~2 ms) — zero-copy views deferred until surface nets moves
+  into wasm too.
+- Dispatcher `buildVolume()` (gen/volumeWasm.ts): wasm when
+  `params.wasmGen` (new, default true, "wasm gen" checkbox in Map)
+  AND the module is ready; JS fallback otherwise (also covers the
+  module still loading during the first regenerate, older browsers,
+  file:// contexts). `[wasm-vol]` debug line names the backend.
+- JS Math.round ported as (x+0.5).floor (exact); f64::hypot ULP risk
+  in the pierce guard documented — did not materialize.
+
+Verified in-browser (`__cwWasm.volParity()`): **byte-identical on both
+test seeds** — maxDiff 0, diffCount 0, blockType diff 0, over ~1.06M
+and ~1.13M voxels WITH live carve ops (5 arches + windows) and wash.
+Timing: volume fill 104 -> 73 ms and 110 -> 86 ms (~1.3-1.4×, scalar
+port + boundary copies); full regenerate 365 -> 322 ms (~12% — the
+fill is ~30% of regen). Consistent with the stage-1 baseline: the
+remaining wins are structural — SIMD batch noise, surface nets + AO
+bake in wasm (AO is the most parallel kernel), zero-copy views.
+
+## 2026-07-06 — WASM generator scaffold (feature/wasm-gen, stacked on texture-set-v2)
+
+User: move the generator to WASM for higher-level array-processing
+abstractions + native-class speed; backend chosen: **Rust** (wasm-pack +
+wasm-bindgen) over AssemblyScript (no numpy-like layer, no
+autovectorizer), C++/Emscripten (toolchain friction), Zig (DIY glue) —
+Rust is the only candidate scoring on expressiveness (iterators /
+ndarray / rayon), codegen (LLVM + simd128) and TS integration
+(generated .d.ts, vite-compatible pkg) at once.
+
+Scaffold (stage 1):
+- Toolchain: rustup (stable 1.96.1, minimal profile) + wasm32 target +
+  wasm-pack 0.15 (prebuilt binary into .cargo/bin). MSVC build tools
+  were already present (host proc-macros need a host linker).
+- `wasm/` crate: cdylib + wasm-bindgen, simd128 enabled via
+  .cargo/config.toml, LTO release profile. `npm run wasm:build` /
+  `wasm:dev` (also strips wasm-pack's pkg/.gitignore stub — pkg/ is
+  COMMITTED so the GH Pages workflow needs no Rust toolchain; revisit
+  if the wasm grows).
+- **Bit-exact noise port**: mulberry32 (u32 wrapping ops == JS
+  `|0`/`imul`/`>>>`) + simplex-noise v4.0.3 noise2D/noise3D (ported
+  from the installed package source, same f64 operation order) + fbm2/
+  fbm3/ridged2. `NoiseKit(seed)` mirrors makeNoise()'s seed derivation.
+- Harness `src/core/wasmGen.ts` (lazy import, dev hook `__cwWasm`):
+  parity() = max |wasm−js| over a 2k-point cloud; bench() = same fbm3
+  grid fill both worlds.
+
+Results: **parity 0.0 (bit-identical) on both test seeds** — maps stay
+reproducible through the port. Bench (1M voxels, 3-octave fbm3): JS
+198 ms vs WASM 134 ms = **1.5×** for a line-by-line scalar port
+(includes the Vec→Float32Array copy). Honest baseline: V8 JITs this
+f64 scalar code well, and branchy simplex gathers defeat the
+autovectorizer. The planned wins are structural, not line-by-line:
+batch 4-wide SIMD evaluation (v128 lanes), f32 where precision
+permits, zero-copy views into wasm memory, whole-volume-fill port
+(one boundary crossing per regenerate), optional rayon threads later
+(needs COOP/COEP — coi-serviceworker shim on GH Pages).
+
+Next stages: port buildDensityVolume fill (fields sampled into flat
+arrays on the TS side or ported wholesale), then surface nets, then
+the AO bake.
+
 ## 2026-07-06 — palette panel (feature/texture-set-v2)
 
 User: the tri-planar albedo hues — mesa/rocks/canyons — should be

@@ -235,6 +235,44 @@
 - [ ] Roughness could key off the normal maps' cavity instead of bare
       luminance
 
+## Next (feature/wasm-gen — Rust WASM generator kernels)
+
+- [x] Scaffold: rustup + wasm-pack toolchain, wasm/ crate (simd128,
+      LTO), npm run wasm:build/wasm:dev, pkg/ committed (no Rust in CI)
+- [x] Bit-exact noise port (mulberry32 + simplex-noise 4.0.3 + fbm/
+      ridged) — parity 0.0; bench harness __cwWasm (1.5× scalar baseline)
+- [x] buildDensityVolume port (fill_volume): byte-identical parity on
+      test seeds incl. carve ops (JS post-pass) + wash; fill ~1.3-1.4×,
+      regen ~12%; wasmGen param (default on) + JS fallback dispatcher
+- [x] Surface nets port (nets.rs): byte-identical (0 pos/idx diffs),
+      2.4× — allocation-bound stages gain most
+- [x] Per-stage perf tracking at TS call sites (core/perf.ts +
+      __cwWasm.pipelineBench): volumeFill 1.35×, nets 2.4×, total
+      345 -> 307 ms; control stages hold 1.0×
+- [x] AO bake port: byte-identical, 2.37× (biggest single win)
+- [x] colorize port: byte-identical (palette crosses per call), 1.91×
+- [x] fields kernels port (EDT + profile loop): byte-identical, 1.5×;
+      placement/rasters stay TS. Pipeline total 372 -> 238 ms (1.57×)
+- [x] Structural refactor ("wasm for real", 2026-07-07 — docs/WASMGEN.md):
+      typed serde boundary (GenParams/Palette/CarveOpSpec objects, all
+      f64 param vectors deleted), carve-op SDFs + computeVertexNormals
+      ported, fused single-call generate_mesh (volume never crosses;
+      207 ms total, 1.75×), kernels rewritten as a typed Rust library
+      (grid.rs samplers, MapNoise once per call, named per-cell fns),
+      par.rs scalar/rayon switch + native bench: 155 -> 35 ms (4.4×,
+      8 threads) same code; simd128 autovec measured ≈ 2% (nothing)
+- [ ] Stage B: port layout / fields glue (hex raster, craters, cracks,
+      blur, mesa offsets) / carve placement -> ONE generate(params) call;
+      then optionally host it in a Web Worker (async regenerate)
+- [ ] Browser threads: wasm-bindgen-rayon (nightly atomics std) + a
+      coi-serviceworker shim for GH Pages — brings the native 4.4×
+      parallel win to the app
+- [ ] Explicit 4-wide SIMD batching for the noise inner loops (autovec
+      gave ~0; needs restructured lanes to pay)
+- [ ] Parallelize surface nets (now 31% of the parallel-native total;
+      needs a two-pass vertex-index scheme — sequential by design today)
+- [ ] fogOverlays stays three.js (not portable); decor/layout cheap in TS
+
 ## Next (research/voxel3d — arches & overhangs, NO tunnels)
 
 - [ ] Look iteration with user: arch proportions/count, wash

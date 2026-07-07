@@ -1,12 +1,14 @@
 import * as THREE from 'three';
 import { HexGrid } from './core/hex';
 import { makeNoise, type NoiseKit } from './core/noise';
+import { perfBegin, perfLog, perfMark } from './core/perf';
 import { placeCarveOps } from './gen/carves';
 import { buildDecor } from './gen/decor';
 import { buildFields, computeObstructed, type Fields } from './gen/fields';
 import { generateLayout, largestComponent, type LayoutResult } from './gen/layout';
 import { buildTerrainGeometry } from './gen/mesher';
 import { defaultParams, defaultRenderOptions, type EditMode, type GenParams, type RenderOptions } from './gen/params';
+import { initWasmGen } from './gen/volumeWasm';
 import { BrushEditor } from './edit/editor';
 import { DECOR_PALETTE } from './gen/decor';
 import { TERRAIN_PALETTE } from './gen/mesher';
@@ -175,7 +177,17 @@ class App {
     });
 
     this.bindKeys();
-    this.regenerate(true);
+    // First build: when the wasm backend is enabled, wait for the module so
+    // the very first map is built by the SAME chain as later regenerates.
+    // The f32 wasm chain and the f64 JS fallback are not bit-identical (Gate
+    // 5), so building the first map on whichever happened to be ready would
+    // make a shared seed render differently by load timing. initWasmGen never
+    // rejects (it logs and stays on JS on failure), so .finally always fires.
+    if (this.params.wasmGen) {
+      void initWasmGen().finally(() => this.regenerate(true));
+    } else {
+      this.regenerate(true);
+    }
 
     const loop = () => {
       requestAnimationFrame(loop);
@@ -190,6 +202,7 @@ class App {
   /** Full pipeline: layout -> fields -> mesh -> decor -> overlays. */
   regenerate(fitView: boolean): void {
     const t0 = performance.now();
+    perfBegin();
     saveParams(this.params);
 
     // map size may have changed
@@ -204,9 +217,12 @@ class App {
 
     this.noise = makeNoise(this.params.seed);
     this.layout = generateLayout(this.grid, this.params, this.noise, edits);
+    perfMark('layout');
     this.fields = buildFields(this.grid, this.layout.open, this.params, this.noise);
+    perfMark('fields');
 
     const carves = placeCarveOps(this.grid, this.fields, this.params, this.noise);
+    perfMark('carves');
     const terrain = buildTerrainGeometry(this.fields, this.params, this.noise, carves);
 
     // swap scene content
@@ -232,6 +248,7 @@ class App {
     this.blocked = decor.blocked;
     this.obstructed = computeObstructed(this.grid, this.layout.open, this.fields, this.params);
     this.mapRoot.add(this.decorGroup);
+    perfMark('decor');
 
     if (this.fogGroup) {
       this.mapRoot.remove(this.fogGroup);
@@ -242,6 +259,8 @@ class App {
 
     this.rebuildOverlays();
     this.applyRenderOptions();
+    perfMark('fogOverlays');
+    perfLog();
 
     const halfW = (this.grid.maxX - this.grid.minX) / 2;
     const halfD = (this.grid.maxZ - this.grid.minZ) / 2;
@@ -623,3 +642,9 @@ function downloadJson(filename: string, data: unknown): void {
 const app = new App();
 // dev hook for scripted verification (Playwright): frame a world position
 (window as unknown as Record<string, unknown>).__cw = app;
+// wasm kernel harness (lazy — no cost unless used): __cwWasm.parity()/bench()
+import('./core/wasmGen').then((m) => {
+  (window as unknown as Record<string, unknown>).__cwWasm = m;
+});
+// note: the wasm module load is kicked off (and, when wasmGen is on, the first
+// build waits on it) inside the App constructor — see the first-build block there.

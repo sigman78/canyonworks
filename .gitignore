@@ -3,3 +3,5 @@ dist/
 *.local
 .playwright-mcp/
 tools/nmap-test/
+wasm/target/
+/pages-live*.jpeg

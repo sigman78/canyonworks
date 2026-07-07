@@ -1,0 +1,16 @@
+{
+  "name": "canyonworks-wasm",
+  "type": "module",
+  "description": "WASM generator kernels for CanyonWorks (noise, volume fill)",
+  "version": "0.1.0",
+  "files": [
+    "canyonworks_wasm_bg.wasm",
+    "canyonworks_wasm.js",
+    "canyonworks_wasm.d.ts"
+  ],
+  "main": "canyonworks_wasm.js",
+  "types": "canyonworks_wasm.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}

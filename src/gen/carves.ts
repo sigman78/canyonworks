@@ -19,6 +19,53 @@ import type { GenParams } from './params';
  * - Window: a hole punched through a thin high fin (cut only), well above
  *   the floor — pure aesthetics, no gameplay effect.
  */
+/**
+ * Serializable twin of a CarveOp's sdf closure: the exact captured numbers,
+ * tagged by shape, so the wasm pipeline can re-evaluate the same math on its
+ * side (ops.rs CarveShape mirrors these field names via serde). The closure
+ * and the spec are two views of the same locals — never let them drift.
+ */
+export type CarveShapeSpec =
+  | {
+      type: 'plug';
+      ax: number;
+      az: number;
+      abx: number;
+      abz: number;
+      len2: number;
+      topA: number;
+      topB: number;
+      saddle: number;
+      halfDepth: number;
+      noiseAmp: number;
+      floorY: number;
+    }
+  | {
+      type: 'vault';
+      mx: number;
+      mz: number;
+      wx: number;
+      wz: number;
+      cx: number;
+      cz: number;
+      halfW: number;
+      springY: number;
+      vLen: number;
+      noiseAmp: number;
+      floorY: number;
+    }
+  | {
+      type: 'window';
+      ex: number;
+      ez: number;
+      dxx: number;
+      dzz: number;
+      len2: number;
+      cy: number;
+      r: number;
+      noiseAmp: number;
+    };
+
 export interface CarveOp {
   kind: 'add' | 'cut';
   /**
@@ -34,7 +81,9 @@ export interface CarveOp {
   maxY: number;
   minZ: number;
   maxZ: number;
-  /** inside-positive pseudo-SDF, world coordinates */
+  /** serializable payload sent to the wasm pipeline */
+  shape: CarveShapeSpec;
+  /** inside-positive pseudo-SDF, world coordinates (wasmGen=false fallback) */
   sdf(x: number, y: number, z: number): number;
 }
 
@@ -306,6 +355,7 @@ function makeArchOps(
     maxY: Math.max(c.h0, c.h1) + 0.5,
     minZ: Math.min(az, bz) - rPlug,
     maxZ: Math.max(az, bz) + rPlug,
+    shape: { type: 'plug', ax, az, abx, abz, len2, topA, topB, saddle, halfDepth, noiseAmp, floorY: floor },
     sdf: plugSdf,
   };
   const exX = Math.abs(wx) * (vHalfW + noiseAmp) + Math.abs(cx) * vLen;
@@ -318,6 +368,7 @@ function makeArchOps(
     maxY: apexY + noiseAmp + 0.1,
     minZ: mz - exZ,
     maxZ: mz + exZ,
+    shape: { type: 'vault', mx, mz, wx, wz, cx, cz, halfW: vHalfW, springY, vLen, noiseAmp, floorY: floor },
     sdf: vaultSdf,
   };
   return { plug, vault };
@@ -426,6 +477,7 @@ function placeWindows(
       maxY: c.cy + rr,
       minZ: Math.min(ez, fz) - rr,
       maxZ: Math.max(ez, fz) + rr,
+      shape: { type: 'window', ex, ez, dxx, dzz, len2, cy: c.cy, r: c.r, noiseAmp },
       sdf,
     };
   });

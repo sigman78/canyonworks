@@ -11,7 +11,9 @@
     "useDefineForClassFields": true,
     "forceConsistentCasingInFileNames": true,
     "noUnusedLocals": false,
-    "noUnusedParameters": false
+    "noUnusedParameters": false,
+    "baseUrl": ".",
+    "paths": { "@wasm": ["wasm/pkg/canyonworks_wasm"] }
   },
   "include": ["src"]
 }

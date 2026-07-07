@@ -20,11 +20,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
       - run: npm ci
+      # Rebuild the wasm kernels from source so the deployed showcase can never
+      # ship a stale wasm/pkg. pkg/ is committed only for local dev / offline
+      # builds; CI regenerates it from wasm/src so Pages always matches source.
+      - run: npm run wasm:build
       - run: npm run build
       - uses: actions/configure-pages@v5
         with:

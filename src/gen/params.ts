@@ -78,6 +78,8 @@ export interface GenParams {
 
   // meshing
   voxelSize: number;
+  /** use the wasm volume-fill kernel when available (else JS fallback) */
+  wasmGen: boolean;
 }
 
 export interface RenderOptions {
@@ -206,6 +208,7 @@ export function defaultParams(): GenParams {
     washScale: 0.05,
 
     voxelSize: 0.3,
+    wasmGen: true,
   };
 }
 

@@ -51,8 +51,3 @@ export function perfLog(): void {
   const parts = Object.entries(current).map(([k, v]) => `${k} ${v.toFixed(1)}`);
   console.debug(`[perf] ${parts.join(' | ')}`);
 }
-
-/** snapshot copy (bench aggregates across runs) */
-export function perfSnapshot(): PerfRecord {
-  return { ...current };
-}

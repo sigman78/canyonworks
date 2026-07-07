@@ -74,24 +74,32 @@ export interface Fields {
   sampleCrack(x: number, z: number): number;
 }
 
-export function buildFields(
-  grid: HexGrid,
-  open: Uint8Array,
-  params: GenParams,
-  noise: NoiseKit,
-): Fields {
+/** volume raster dims + the open-cell mask that both EDT backends consume */
+export interface OpenRaster {
+  openRaster: Uint8Array;
+  nx: number;
+  nz: number;
+  originX: number;
+  originZ: number;
+  voxel: number;
+}
+
+/**
+ * Step 1 of buildFields, extracted so the fieldsParity harness
+ * (core/wasmGen.ts) feeds the wasm/JS EDTs the EXACT raster the real pipeline
+ * uses instead of a verbatim copy that silently drifts. Rasterizes hex
+ * passability at column resolution; outside the hex map each column inherits
+ * its nearest border cell, so open portals keep running to the volume edge
+ * instead of hitting an artificial wall.
+ */
+export function rasterizeOpen(grid: HexGrid, open: Uint8Array, params: GenParams): OpenRaster {
   const voxel = params.voxelSize;
   const pad = params.wallThickness + 1.5;
   const originX = grid.minX - pad;
   const originZ = grid.minZ - pad;
   const nx = Math.ceil((grid.maxX + pad - originX) / voxel) + 1;
   const nz = Math.ceil((grid.maxZ + pad - originZ) / voxel) + 1;
-  const n = nx * nz;
-
-  // 1. rasterize hex passability at column resolution; outside the hex map
-  // each column inherits its nearest border cell, so open portals keep
-  // running to the volume edge instead of hitting an artificial wall
-  const openRaster = new Uint8Array(n);
+  const openRaster = new Uint8Array(nx * nz);
   for (let iz = 0; iz < nz; iz++) {
     const z = originZ + iz * voxel;
     for (let ix = 0; ix < nx; ix++) {
@@ -102,6 +110,22 @@ export function buildFields(
       if (open[grid.index(col, row)]) openRaster[iz * nx + ix] = 1;
     }
   }
+  return { openRaster, nx, nz, originX, originZ, voxel };
+}
+
+/** shared empties for the dev-only parity rasters when dropped in prod builds */
+const EMPTY_F32 = new Float32Array(0);
+const EMPTY_U8 = new Uint8Array(0);
+
+export function buildFields(
+  grid: HexGrid,
+  open: Uint8Array,
+  params: GenParams,
+  noise: NoiseKit,
+): Fields {
+  // 1. rasterize hex passability (shared with the fieldsParity harness)
+  const { openRaster, nx, nz, originX, originZ, voxel } = rasterizeOpen(grid, open, params);
+  const n = nx * nz;
 
   // 2. signed 2D distance field: wasm EDT when available (bit-identical),
   // else the JS one; the voxel scaling to world units stays HERE either way
@@ -199,9 +223,13 @@ export function buildFields(
     hexFlat,
     craters,
     cracks,
-    flattenW,
-    flatRaw,
-    mesaOff,
+    // dev-only: retained solely so the fieldsParity harness can replay the
+    // profile step on identical inputs. Dropped in production builds so every
+    // Fields doesn't pin ~1-2MB of parity rasters for a console tool that
+    // never runs there — nothing else reads them after buildFields returns.
+    flattenW: import.meta.env.DEV ? flattenW : EMPTY_F32,
+    flatRaw: import.meta.env.DEV ? flatRaw : EMPTY_U8,
+    mesaOff: import.meta.env.DEV ? mesaOff : EMPTY_F32,
     maxH,
     sampleGround: sample(groundH),
     sampleS2: sample(s2),

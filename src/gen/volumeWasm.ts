@@ -1,4 +1,3 @@
-import { wasmGen } from '../core/wasmGen';
 import type { CarveOp } from './carves';
 import type { Crater, Fields } from './fields';
 import type { GenParams } from './params';
@@ -15,10 +14,27 @@ import type { GenParams } from './params';
  * implementation.
  */
 
-type WasmModule = Awaited<ReturnType<typeof wasmGen>>;
+type WasmModule = typeof import('../../wasm/pkg/canyonworks_wasm');
 
 let wasmModule: WasmModule | null = null;
 let initPromise: Promise<void> | null = null;
+let modPromise: Promise<WasmModule> | null = null;
+
+/**
+ * Lazy-load + instantiate the wasm module (no cost until first use). Lives
+ * here in the dispatch layer — NOT in the dev harness (core/wasmGen.ts) — so
+ * production code reaches the loader without statically pulling the entire
+ * bench/parity harness into the main bundle; the harness imports this.
+ */
+export async function wasmGen(): Promise<WasmModule> {
+  if (!modPromise) {
+    modPromise = import('../../wasm/pkg/canyonworks_wasm').then(async (m) => {
+      await m.default();
+      return m;
+    });
+  }
+  return modPromise;
+}
 
 /** Kick off the wasm module load; safe to call multiple times, fire-and-forget. */
 export function initWasmGen(): Promise<void> {
@@ -35,11 +51,18 @@ export function initWasmGen(): Promise<void> {
 }
 
 /**
- * The pure-JS density fill IS the `wasmGen: false` fallback — re-exported
- * under its historical dispatcher name for callers that predate the fused
- * pipeline (the wasm fill is only reachable through generate_mesh now).
+ * A wasm trap (Rust panic/assert surfaces as a `WebAssembly.RuntimeError`) can
+ * leave the module instance mid-mutation; per wasm-bindgen it must not be
+ * reused, so drop the singleton and every later call stays on the JS fallback
+ * for the rest of the session. A plain exception (e.g. a serde decode error)
+ * is thrown before any wasm mutation and is recoverable — keep the module.
  */
-export { buildDensityVolume as buildVolume } from './volume';
+function disableWasmOnTrap(err: unknown): void {
+  if (err instanceof WebAssembly.RuntimeError) {
+    console.error('[wasm] trap detected — disabling the wasm backend for this session (instance poisoned)');
+    wasmModule = null;
+  }
+}
 
 /** plain linear-space color triple (a THREE.Color snapshot: {r, g, b}) */
 export interface Rgb {
@@ -156,6 +179,7 @@ export function tryWasmGenerateMesh(
     return out;
   } catch (err) {
     console.error('[wasm-mesh] generate_mesh failed, falling back to the JS chain', err);
+    disableWasmOnTrap(err);
     return null;
   }
 }
@@ -184,6 +208,7 @@ export function tryWasmSignedDistance(
     return out;
   } catch (err) {
     console.error('[wasm-fields] signed_distance failed, falling back to the JS EDT', err);
+    disableWasmOnTrap(err);
     return null;
   }
 }
@@ -251,6 +276,7 @@ export function tryWasmFieldsProfile(
     return out;
   } catch (err) {
     console.error('[wasm-fields] fields_profile failed, falling back to the JS profile', err);
+    disableWasmOnTrap(err);
     return null;
   }
 }

@@ -10,9 +10,9 @@
 //! narrow ONCE on serde decode (the one conversion point — params.rs module
 //! doc), the SDF math runs f32 in the same operand order, and the density
 //! buffer it edits is f32 already. Deterministic; the JS closure fallback is
-//! visually equivalent, not bitwise. `apply_carve_ops` is the port of
-//! `applyCarveOpsPostPass` in src/gen/volumeWasm.ts, which itself mirrors the
-//! op pass inside volume.ts's fill loop.
+//! visually equivalent, not bitwise. `apply_carve_ops` ports the carve-op pass
+//! the pure-JS fallback runs inside `buildDensityVolume` (src/gen/volume.ts);
+//! the op shapes mirror src/gen/carves.ts `CarveShapeSpec` field-for-field.
 
 use std::collections::BTreeMap;
 
@@ -215,9 +215,9 @@ impl CarveShape {
     }
 }
 
-/// Carve-op post-pass over the filled volume — port of
-/// `applyCarveOpsPostPass` in src/gen/volumeWasm.ts: identical block/voxel
-/// iteration and op ordering; the SDF math runs f32 since Gate 5.
+/// Carve-op post-pass over the filled volume — ports the op pass the pure-JS
+/// fallback runs inside `buildDensityVolume` (src/gen/volume.ts): identical
+/// block/voxel iteration and op ordering; the SDF math runs f32 since Gate 5.
 ///
 /// Per-block op lists are rebuilt purely from op bounds via
 /// `Aabb::block_range` — the SAME math the fill used to force these

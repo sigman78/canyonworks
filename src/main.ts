@@ -177,7 +177,17 @@ class App {
     });
 
     this.bindKeys();
-    this.regenerate(true);
+    // First build: when the wasm backend is enabled, wait for the module so
+    // the very first map is built by the SAME chain as later regenerates.
+    // The f32 wasm chain and the f64 JS fallback are not bit-identical (Gate
+    // 5), so building the first map on whichever happened to be ready would
+    // make a shared seed render differently by load timing. initWasmGen never
+    // rejects (it logs and stays on JS on failure), so .finally always fires.
+    if (this.params.wasmGen) {
+      void initWasmGen().finally(() => this.regenerate(true));
+    } else {
+      this.regenerate(true);
+    }
 
     const loop = () => {
       requestAnimationFrame(loop);
@@ -636,6 +646,5 @@ const app = new App();
 import('./core/wasmGen').then((m) => {
   (window as unknown as Record<string, unknown>).__cwWasm = m;
 });
-// kick off the wasm volume-fill kernel load, fire-and-forget: buildVolume()
-// falls back to JS until this resolves (or forever, if params.wasmGen is off)
-void initWasmGen();
+// note: the wasm module load is kicked off (and, when wasmGen is on, the first
+// build waits on it) inside the App constructor — see the first-build block there.

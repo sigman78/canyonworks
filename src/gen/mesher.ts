@@ -50,11 +50,12 @@ export function buildTerrainGeometry(
       aoBake: wasmOut.stageMs[3],
       colorize: wasmOut.stageMs[4],
     });
-    // ny for the HUD voxel stats — mirrors the wasm-side formula
-    // (pipeline.rs volume_ny) but computes it in f64 while wasm runs f32,
-    // so it can differ by 1 near a ceil boundary: voxRawKb is approximate
-    // on this path (display-only stat)
-    const ny = Math.ceil((fields.maxH + 1.0) / fields.voxel) + 1;
+    // ny for the HUD voxel stats — replicate wasm volume_ny (pipeline.rs)
+    // in the SAME f32 arithmetic (Math.fround), so voxRawKb matches the
+    // volume the wasm side actually allocated instead of drifting by one
+    // nx*nz slab near a ceil boundary
+    const ny =
+      Math.ceil(Math.fround(Math.fround(Math.fround(fields.maxH) + 1) / Math.fround(fields.voxel))) + 1;
     return terrainResult(
       geometry,
       wasmOut.positions,

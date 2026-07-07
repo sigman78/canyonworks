@@ -87,8 +87,8 @@ fn axis_block_range(min: f32, max: f32, origin: f32, voxel: f32, nb: usize) -> (
 
 impl Aabb {
     /// THE bounds->blocks math — one home for the identical expressions that
-    /// volume.ts's fill and volumeWasm.ts's applyCarveOpsPostPass both carry
-    /// (`axis_block_range`, ONE formula mapped over x/y/z). Shared by the
+    /// volume.ts's fill and the carve-op post-pass (ops::apply_carve_ops) both
+    /// carry (`axis_block_range`, ONE formula mapped over x/y/z). Shared by the
     /// fill's MIXED forcing and ops::apply_carve_ops so classification and
     /// the post-pass always agree on which blocks an op can bite. `None`
     /// when the bounds miss the volume entirely (the JS loops run zero

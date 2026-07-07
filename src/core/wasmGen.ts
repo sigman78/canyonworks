@@ -1,7 +1,10 @@
 import * as THREE from 'three';
 import { fbm3, makeNoise, type NoiseKit } from './noise';
+import { lastPerf } from './perf';
 import type { HexGrid } from './hex';
 import { placeCarveOps } from '../gen/carves';
+import { buildFields, fieldsProfileJs, rasterizeOpen } from '../gen/fields';
+import { colorizeJs, computeAoJs, paletteSpec } from '../gen/mesher';
 import type { GenParams } from '../gen/params';
 import { signedDistance } from '../gen/sdf2d';
 import { surfaceNets } from '../gen/surfacenets';
@@ -11,10 +14,16 @@ import {
   tryWasmFieldsProfile,
   tryWasmGenerateMesh,
   tryWasmSignedDistance,
+  wasmGen,
 } from '../gen/volumeWasm';
 
 /**
- * WASM generator harnesses (wasm/ crate, built by `npm run wasm:build`).
+ * WASM generator harnesses (wasm/ crate, built by `npm run wasm:build`). This
+ * module is DEV-ONLY: it is reached solely through main.ts's dynamic
+ * `import('./core/wasmGen')` for the `__cwWasm` console hook, so bundlers keep
+ * it (and its bench/parity code) out of the main chunk. The wasm loader
+ * itself lives in gen/volumeWasm — importing it here does NOT drag the
+ * harness back into production.
  *
  * - `parity()` / `bench()`: the noise kit — nearness to the JS simplex-noise
  *   (the wasm noise runs f32 since Gate 5) and a like-for-like fbm3
@@ -26,21 +35,6 @@ import {
  *
  * Usage (dev console / Playwright): `await __cwWasm.meshCompare()`
  */
-
-type WasmModule = typeof import('../../wasm/pkg/canyonworks_wasm');
-
-let modPromise: Promise<WasmModule> | null = null;
-
-/** lazy-load + instantiate the wasm module (no cost until first use) */
-export async function wasmGen(): Promise<WasmModule> {
-  if (!modPromise) {
-    modPromise = import('../../wasm/pkg/canyonworks_wasm').then(async (m) => {
-      await m.default();
-      return m;
-    });
-  }
-  return modPromise;
-}
 
 /** max |wasm - js| over a pseudo-random point cloud; 0 = bit-identical */
 export async function parity(seed = 1337, points = 2000): Promise<{ n2: number; n3: number }> {
@@ -156,10 +150,6 @@ export async function meshCompare(): Promise<{
   facies: BufferDiff;
 }> {
   await initWasmGen();
-  // dynamic import: gen/volumeWasm imports this module, and gen/mesher
-  // imports gen/volumeWasm — a static mesher import here would close the
-  // cycle in the static graph
-  const { computeAoJs, colorizeJs, paletteSpec } = await import('../gen/mesher');
   // the running app instance (main.ts dev hook); fields/params/noise/grid
   // are private on App but reachable here through `any`
   const app = (window as unknown as { __cw?: unknown }).__cw as
@@ -228,16 +218,17 @@ export async function meshCompare(): Promise<{
  * Fields parity/bench (stage 6): checks BOTH fields kernels against the
  * running app's map.
  *
- * 1. Signed distance: replicates buildFields' openRaster rasterization
- *    (step 1, copied verbatim) and runs the JS signedDistance vs the wasm
- *    signed_distance on the SAME raster, comparing in CELL units — BEFORE
- *    the `* voxel` scaling that buildFields applies afterwards. Expected
- *    exactly zero — the EDT is the one kernel still f64 (Gate-5 whitelist,
- *    see wasm/src/fields.rs) and IEEE sqrt is exact.
+ * 1. Signed distance: builds the raster via the shared rasterizeOpen (the
+ *    same step-1 helper buildFields uses, not a copy) and runs the JS
+ *    signedDistance vs the wasm signed_distance on the SAME raster, comparing
+ *    in CELL units — BEFORE the `* voxel` scaling that buildFields applies
+ *    afterwards. Expected exactly zero — the EDT is the one kernel still f64
+ *    (Gate-5 whitelist, see wasm/src/fields.rs) and IEEE sqrt is exact.
  * 2. Ground profile: builds a reference Fields with wasmGen forced OFF
  *    (pure JS end to end), then re-runs the profile step on the SAME
  *    flattened inputs — buildFields keeps its intermediates (flattenW,
- *    flatRaw, mesaOff) on the returned Fields precisely for this — via the
+ *    flatRaw, mesaOff) on the returned Fields precisely for this, in dev
+ *    builds only (import.meta.env.DEV; dropped in production) — via the
  *    JS fieldsProfileJs (timed) and the wasm fields_profile (timed), and
  *    diffs groundH/wallMask/craterD/maxH against the reference. NOT a
  *    parity gate since Gate 5: the wasm profile runs f32 against the f64 JS
@@ -259,10 +250,6 @@ export async function fieldsParity(): Promise<{
   wasmMs: number;
 }> {
   await initWasmGen();
-  // dynamic import: gen/fields imports gen/volumeWasm which imports this
-  // module — a static fields import here would close the cycle in the
-  // static graph (same reasoning as the mesher imports above)
-  const { buildFields, fieldsProfileJs } = await import('../gen/fields');
   const app = (window as unknown as { __cw?: unknown }).__cw as
     | {
         grid: HexGrid;
@@ -275,26 +262,10 @@ export async function fieldsParity(): Promise<{
   const { grid, layout, params, noise } = app;
   const open = layout.open;
 
-  // --- signed distance: replicate buildFields step 1 (verbatim copy) so
-  // both EDTs see the exact same raster ---
-  const voxel = params.voxelSize;
-  const pad = params.wallThickness + 1.5;
-  const originX = grid.minX - pad;
-  const originZ = grid.minZ - pad;
-  const nx = Math.ceil((grid.maxX + pad - originX) / voxel) + 1;
-  const nz = Math.ceil((grid.maxZ + pad - originZ) / voxel) + 1;
+  // --- signed distance: build the EXACT raster buildFields uses (shared
+  // rasterizeOpen, not a copy) so both EDTs see identical input ---
+  const { openRaster, nx, nz } = rasterizeOpen(grid, open, params);
   const n = nx * nz;
-  const openRaster = new Uint8Array(n);
-  for (let iz = 0; iz < nz; iz++) {
-    const z = originZ + iz * voxel;
-    for (let ix = 0; ix < nx; ix++) {
-      const x = originX + ix * voxel;
-      let [col, row] = grid.worldToCell(x, z);
-      col = Math.max(0, Math.min(grid.cols - 1, col));
-      row = Math.max(0, Math.min(grid.rows - 1, row));
-      if (open[grid.index(col, row)]) openRaster[iz * nx + ix] = 1;
-    }
-  }
 
   const jsSd = signedDistance(openRaster, nx, nz);
   const wasmSd = tryWasmSignedDistance(openRaster, nx, nz, { ...params, wasmGen: true });
@@ -388,7 +359,6 @@ export async function pipelineBench(runs = 3): Promise<{
   totalWasmMs: number;
 }> {
   await initWasmGen();
-  const { lastPerf } = await import('./perf');
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const app = (window as any).__cw;
   if (!app) throw new Error('app not ready (__cw missing)');
@@ -404,9 +374,15 @@ export async function pipelineBench(runs = 3): Promise<{
     return acc;
   };
 
+  // remember and restore the user's backend choice: the bench flips wasmGen
+  // to measure both paths, and each regenerate persists it via saveParams —
+  // leaving it forced would silently clobber a deliberate opt-out (localStorage
+  // + across reloads) while the GUI checkbox still shows the stale state
+  const prevWasmGen = app.params.wasmGen;
   const js = measure(false);
   const wasm = measure(true);
-  app.params.wasmGen = true;
+  app.params.wasmGen = prevWasmGen;
+  app.regenerate(false); // rebuild + persist on the user's selected backend
 
   const stages: Record<string, { jsMs: number; wasmMs: number; speedup: number }> = {};
   let totalJsMs = 0;

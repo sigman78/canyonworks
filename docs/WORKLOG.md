@@ -1,5 +1,47 @@
 # Worklog
 
+## 2026-07-06 — texture set v2 (feature/texture-set-v2): richer colors, canonical normals
+
+User: regenerate the texture set with richer colors, proper
+materials/details, non-flipped normal maps. All 25 assets regenerated
+(9 albedos at 2K, 7 heights, 9 normals at 1K).
+
+- **Richer color**: every albedo prompt now names 3-5 distinct hues
+  (gravel: terracotta / plum-grey / cream / ochre / near-black varnish;
+  cliff: vermilion / burnt-sienna / plum strata + cream caps + blue-grey
+  varnish streaks; crater: ash-taupe / dusty rose / lilac / sage…).
+  V1 read as tinted grayscale; v2 stones on the floor are individually
+  colored. Same-seed A/B: overall scene brightness identical (the
+  vertex palette still owns the grading), floor +5% with much higher
+  chroma.
+- **Mean-luminance normalization** baked into gen-textures.mjs
+  (`--normalize-only` re-levels without API calls): the shader treats
+  texels as raw ~0.5-neutral values, so a bright-mean texture bleaches
+  everything it covers. The fresh set came back 106-197 mean (drift
+  197!) — all re-leveled to 128 multiplicatively (hue survives).
+  Empirically the visible effect was small (~3%) because the palette
+  dominates, but the contract is worth keeping.
+- **Non-flipped normal maps**: two-layer fix. (1) The prompt now spells
+  out channel directions ("where the surface tilts to face the RIGHT
+  edge, red brighter than 128…"). (2) gen-normalmaps.mjs calibrates
+  each generated map deterministically — correlates R/G (blurred,
+  128px) against the gradient of the texture's own _h.png (bright =
+  raised by construction; albedo luminance fallback for cliff/rock) and
+  flips inverted channels IN THE FILE. Result: canonical files, the
+  AUTHORED_FLIP_R loader hack retired (knobs kept at false for
+  hand-dropped maps). The log vindicated per-map calibration: 7/9 maps
+  came out R-inverted but MESA was correct-handed — a fixed global flip
+  (the v1 approach) would have silently broken it. Strong correlations
+  (gravel -0.71, rubble -0.73, mesa +0.81) confirm GenAI keeps layouts
+  aligned enough to verify automatically after all.
+- In-engine check (bump 0.5, sun -57°): stone relief lit consistently
+  with geometry shadows — handedness correct; no seams (plain Repeat +
+  anti-tiling dual tap); 2K albedos may contain an internal ~2x2 repeat
+  painted by the model (effective detail ~1K) — acceptable, revisit if
+  ground repetition shows.
+- Tooling: sharp added as devDependency (JPEG encode, resampling,
+  stats); img2img sources downscaled to 1K before upload.
+
 ## 2026-07-06 — v0.16 (research/voxel3d): real normal maps + texture albedo blend
 
 Rendering/textures track kickoff (user: textures read as "monochrome

@@ -58,6 +58,22 @@ export interface GenParams {
   screeClusters: number;
   screeSize: number;
 
+  // 3D carve ops (research/voxel3d)
+  archCount: number; // arches: rock plug + vault cut over corridor throats
+  archDepth: number; // along-corridor rock thickness of the arch, world units
+  archThickness: number; // rock above the vault apex (cap), world units
+  archClearance: number; // min vault apex height over the floor, world units
+  archMaxSpan: number; // max wall-to-wall span, world units
+  windowCount: number; // holes punched through thin high fins
+  windowRadius: number; // window hole radius, world units
+
+  // basal wash: erosion notch at wall bases -> overhangs & grottoes,
+  // gated by a map-wide large-scale noise mask (patchy, not everywhere)
+  washAmp: number; // max notch depth into the wall, world units
+  washHeight: number; // notch band height above the floor, world units
+  washCoverage: number; // 0..1 fraction of the mask that washes
+  washScale: number; // mask frequency — lower = larger washed regions
+
   // meshing
   voxelSize: number;
 }
@@ -154,6 +170,19 @@ export function defaultParams(): GenParams {
     pillarCount: 3,
     screeClusters: 14,
     screeSize: 0.16,
+
+    archCount: 2,
+    archDepth: 2.4,
+    archThickness: 0.8,
+    archClearance: 1.9,
+    archMaxSpan: 8,
+    windowCount: 2,
+    windowRadius: 0.9,
+
+    washAmp: 0.7,
+    washHeight: 1.2,
+    washCoverage: 0.45,
+    washScale: 0.05,
 
     voxelSize: 0.3,
   };

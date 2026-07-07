@@ -149,7 +149,7 @@ export function applyTriplanarDetail(
         `#include <common>
         varying vec3 vTriPos;
         varying vec3 vTriNormal;
-        ${vertexAo ? 'attribute float ao;\n        varying float vTriAo;\n        attribute vec2 facies;\n        varying vec2 vTriFacies;' : ''}
+        ${vertexAo ? 'attribute float ao;\n        varying float vTriAo;\n        attribute vec3 facies;\n        varying vec3 vTriFacies;' : ''}
         ${sandContact ? 'varying float vSandY;' : ''}`,
       )
       .replace(
@@ -200,7 +200,7 @@ export function applyTriplanarDetail(
         float triMask( vec2 p ) {
           return 0.65 * triNoise( p ) + 0.35 * triNoise( p * 2.7 + 13.1 );
         }
-        ${vertexAo ? 'uniform float uTriAo;\n        varying float vTriAo;\n        varying vec2 vTriFacies;' : ''}
+        ${vertexAo ? 'uniform float uTriAo;\n        varying float vTriAo;\n        varying vec3 vTriFacies;' : ''}
         ${sandContact ? 'uniform vec3 uSandC;\n        uniform vec2 uSandR;\n        varying float vSandY;' : ''}
         // roughness offset + layer mask weights, computed in color_fragment
         // and consumed by the roughness / normal includes further down
@@ -282,7 +282,13 @@ export function applyTriplanarDetail(
           // plateau tops: slickrock base with its own facies — dune sand
           // pools in the dome hollows (baked morphology attribute), rubble
           // patches from world-space noise
-          float triPlateau = smoothstep( uTriPlateauY - 1.2, uTriPlateauY, vTriPos.y );
+          // baked plateau weight (facies.z): computed on the CPU from
+          // local-top proximity + wall-interior/height tests, so basal
+          // knobs, wash lips and grotto ceilings never receive the pale
+          // mesa texture (they read as light leaking into shadows).
+          // Up-facing gate kept: the top projection weight uses abs().
+          float triPlateau = ${vertexAo ? 'vTriFacies.z' : 'smoothstep( uTriPlateauY - 1.2, uTriPlateauY, vTriPos.y )'}
+            * smoothstep( 0.15, 0.5, normalize( vTriNormal ).y );
           vec3 triMesa = triLayered( uTriMesa, triUvTop );
           float triHollow = ${vertexAo ? 'clamp( vTriFacies.x * 1.4 - 0.15, 0.0, 1.0 )' : '0.0'};
           float triMDuneTop =

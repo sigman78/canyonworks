@@ -156,6 +156,46 @@
 - [x] Drifting cloud shadows on direct sunlight (animated world-space
       value noise, Render tweaks slider)
 
+## Done (v0.14 — block-sparse volume, branch `research/voxel3d`)
+
+- [x] `gen/volume.ts`: density fill extracted from mesher into a 4³
+      block-classified volume (AIR/SOLID/MIXED from per-column surface
+      bands, padded 1 voxel); only MIXED blocks evaluated per voxel
+- [x] Surface nets skips non-MIXED block runs in the same global cell
+      order — output byte-identical to brute force
+- [x] `tools/verify-volume.ts`: A/B verifier (geometry bytes + density
+      signs), 5 seeds × 3 voxel sizes; caught a diorama-skirt
+      classification bug at thin final blocks
+- [x] `[mesher]` console.debug: block stats + per-stage timings
+- [x] Carve-op stage: `gen/carves.ts` CarveOp (add/cut pseudo-SDF +
+      bounds), per-block op lists in the volume, byte-identity contract
+      extended to ops
+- [x] Natural arches over corridor throats: deterministic radial-probe
+      placement, highest-rock anchoring — REDESIGNED after user feedback
+      ("slabs"): plug (wall-to-wall rock mass) + arched vault cut, legs in
+      the walls, real hole underneath; adds-then-cuts op ordering
+- [x] Fin windows: cut holes through thin fins (open air both sides),
+      above the floor, no passability impact
+- [x] Basal wash ("washed foundation"): erosion notch at wall bases ->
+      overhangs/grottoes, gated by map-wide large-scale noise mask +
+      detail scallops; flat floor untouched; 4 sliders
+- [x] "3D carve" GUI folder (arches, depth, cap, clearance, span,
+      windows, wash x4)
+- [x] `IsoViewer.lookAtWorld` + `window.__cw` dev hook for scripted
+      visual verification
+
+## Next (research/voxel3d — arches & overhangs, NO tunnels)
+
+- [ ] Look iteration with user: arch proportions/count, wash
+      depth/coverage defaults, window scarcity (thick walls offer few
+      fins — consider fin-friendlier wall gen if windows matter)
+- [ ] Cornice at the rim (lean-out near the top) — the wash covers the
+      base; a rim counterpart would complete the profile
+- [ ] Headroom-aware passability (still guaranteed by construction;
+      needed if cut ops ever open odd spaces over passable cells)
+- [ ] Wash vs decor: scree fans / boulders can float inside washed
+      hollows (decor samples the 2D fields only) — check & fix if seen
+
 ## Next
 
 - [ ] Decor edit brushes: place/erase boulders & pillars by hand; persist

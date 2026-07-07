@@ -5,9 +5,18 @@
  * and quads (as triangle pairs) across every sign-changing grid edge.
  */
 
+import { BLOCK, BLOCK_MIXED, BLOCK_SHIFT } from './volume';
+
 export interface NetsResult {
   positions: Float32Array;
   indices: Uint32Array;
+}
+
+/** Block classification of the volume — only MIXED blocks contain crossings. */
+export interface BlockInfo {
+  blockType: Uint8Array;
+  nbx: number;
+  nby: number;
 }
 
 // 12 cube edges as corner-index pairs; corner i offset = (i&1, (i>>1)&1, (i>>2)&1)
@@ -26,6 +35,7 @@ export function surfaceNets(
   originX: number,
   originY: number,
   originZ: number,
+  blocks?: BlockInfo,
 ): NetsResult {
   const positions: number[] = [];
   const indices: number[] = [];
@@ -35,9 +45,20 @@ export function surfaceNets(
   const strideZ = nx * ny;
   const steps = [1, strideY, strideZ];
 
+  // Cells are visited in the same global z -> y -> x order with or without
+  // block info; skipped runs are provably crossing-free, so the emitted
+  // vertex/index streams are byte-identical either way.
   for (let z = 0; z < nz - 1; z++) {
     for (let y = 0; y < ny - 1; y++) {
-      for (let x = 0; x < nx - 1; x++) {
+      const blockRow = blocks
+        ? ((z >> BLOCK_SHIFT) * blocks.nby + (y >> BLOCK_SHIFT)) * blocks.nbx
+        : 0;
+      for (let xRun = 0; xRun < nx - 1; xRun += BLOCK) {
+      if (blocks && blocks.blockType[blockRow + (xRun >> BLOCK_SHIFT)] !== BLOCK_MIXED) {
+        continue;
+      }
+      const xEnd = Math.min(xRun + BLOCK, nx - 1);
+      for (let x = xRun; x < xEnd; x++) {
         const base = x + y * strideY + z * strideZ;
         let mask = 0;
         for (let i = 0; i < 8; i++) {
@@ -118,6 +139,7 @@ export function surfaceNets(
             }
           }
         }
+      }
       }
     }
   }

@@ -1,5 +1,220 @@
 # Worklog
 
+## 2026-07-06 — v0.14 (branch `research/voxel3d`): block-sparse density volume
+
+Kickoff of the true-3D terrain research track (goal: arches + overhangs —
+tunnels were considered and dropped as impractical for the map). Step 1 is
+pure infrastructure: make the density volume block-sparse so a genuinely 3D
+field (carve ops, more 3D noise) stays inside the regen budget, with **zero
+output change**.
+
+- `src/gen/volume.ts`: the density fill moved out of the mesher into
+  `buildDensityVolume()`. The volume is split into 4³ blocks classified
+  AIR / SOLID / MIXED against per-column surface bands
+  `[groundH - influence, groundH + influence]` over a 1-voxel-padded
+  footprint; only MIXED blocks are evaluated per voxel, homogeneous blocks
+  are constant-filled (sign is all the mesher reads there). Storage stays
+  one dense Float32Array — the sparsity is in evaluation/traversal, which
+  is where the time goes (a few MB dense is irrelevant at this scale).
+- `surfacenets.ts`: traversal keeps the exact global z→y→x cell order but
+  skips whole non-MIXED block runs, so the emitted vertex/index streams
+  are **byte-identical** to the brute-force path — that's the correctness
+  contract, not "looks the same".
+- `tools/verify-volume.ts` (npx tsx): A/B check classified vs forceAllMixed
+  across 5 seeds × 3 voxel sizes — asserts byte-identical geometry and
+  sign-identical density at every voxel (AO reads signs only).
+- **Bug found by the verifier**: the diorama-skirt rule (volume boundary
+  forced to air) was only applied to blocks *containing* boundary voxels,
+  but cells in a block's last row read corners one voxel further — with a
+  1-voxel-thin final block the skirt crossings sit in the *inner* neighbor,
+  which classified SOLID and got skipped (dropped ~5.6k verts at
+  voxel 0.15). BLOCK=8 masked it by luck of nz%8; BLOCK=4 exposed it.
+  Fix: boundary-force any would-be-solid block whose padded range reaches
+  the forced-air shell.
+- BLOCK=4 beats 8: tighter hull around cliff faces (27% vs 36% mixed at
+  voxel 0.15) and faster nets. Numbers (seed 42): voxel 0.3 — mixed 41%,
+  nets 28→24 ms; voxel 0.15 — mixed 27%, fill 182→163 ms, nets 181→105 ms.
+  Modest at 0.3 (noise eval was already band-gated); the win grows with
+  resolution, and the block grid is the hook for per-block carve-op lists
+  in the next step.
+- Mesher now logs a `[mesher]` console.debug line with block stats + stage
+  timings. Verified in-browser: default map renders identically, gen 466 ms
+  total (fill 39, nets 66, normals+ao 107, color 33).
+
+**Same day — carve-op stage + natural arches:**
+
+- `src/gen/carves.ts`: `CarveOp` = inside-positive pseudo-SDF + conservative
+  world bounds; `add` unions rock in (`d = max(d, sdf)`), `cut` subtracts
+  (`d = min(d, -sdf)`, unused yet — reserved for fin windows). Ops plug into
+  `buildDensityVolume` after the column fill: blocks whose padded range
+  intersects an op's bounds are forced MIXED and get a per-block op list —
+  assignment depends only on the bounds, so the byte-identity contract
+  (verify-volume, now with `archCount 4`) covers ops too.
+- **Arch = natural bridge over a corridor throat.** Placement is fully
+  deterministic from the fields, no RNG: from each flat hex, probe 24 radial
+  directions in the 2D SDF for the nearest wall and a facing wall within
+  ±30° of opposite; span + both-rims-high-enough → candidate; greedy pick by
+  score (rim height / span) with ≥6 wu separation. The op solid is a
+  wall-to-wall beam: flat deck (plateau remnant — picks up the cap color +
+  mesa texture layers automatically), parabolic underside thickest at the
+  abutments, small fBm perturbation on edges/underside so the CSG doesn't
+  read machine-cut.
+- Placement iteration (caught by running the verifier across seeds, not by
+  eye): v1 sampled rim height at fixed 1.1 wu behind the wall face — walls
+  ease up over `wallThickness`, so that's a low shoulder and most seeds got
+  ZERO arches. v2 marched inward to the first tall-enough rock — still
+  starved seeds whose mesas sink (per-region altitude offsets; seed 12345's
+  best reachable rock is 4.26 wu vs the 4.9 bar). v3: anchor at the HIGHEST
+  rock within `wallThickness+1.5` of the face, sink the deck 10% below the
+  lower rim, and let deck thickness give way (min 0.35) so only the
+  clearance itself is a hard requirement. All test seeds now place 1–4
+  arches (some maps genuinely offer few sites).
+- Hexes under a deck keep their floor untouched (ops live only in the 3D
+  volume; 2D fields and the draped overlays never see them), so passability
+  and the grid are unchanged — the bridge just roofs an existing corridor.
+  Clearance under the deck is guaranteed by construction (default 1.9 wu).
+- "3D carve" GUI folder: arches / arch width / deck thickness / clearance /
+  max span. Verified in-browser at seed 16859: 2/2 arches, the central one
+  reads as a pale-capped rock span rooted into two mesas with the corridor
+  grid running beneath; `[carves]` debug line logs placements + world
+  coords.
+
+**Feedback: "those arches won't cut it — just slabs."** User wants an
+actual cut through existing walls or a real arched formation with a hole
+underneath. Redesign (same day):
+
+- **Arch = plug + vault** instead of a floating beam. The `add` op is now a
+  full-height rock mass filling the throat wall-to-wall (rooted below the
+  floor, crown blending between the two abutment heights with an eroded
+  mid-span saddle); a `cut` op pierces an arched slot through it along the
+  corridor — vertical sides to the spring line, semicircular crown, hugging
+  the wall faces so no legs land on passable cells and the passage keeps
+  its width. Op array is ordered adds-then-cuts so openings always win.
+  Result reads as the canyon walls meeting overhead with a genuine dark
+  vault beneath (verified in-browser; the plug merges invisibly with the
+  strata).
+- **Fin windows**: cut-only holes punched through thin tall fins (wall
+  columns with |s2| <= 1.15 and open air on BOTH sides within reach), well
+  above the floor — no passability impact. Scarce by nature on this
+  generator's thick walls (0-1 per map typically); scan is deterministic.
+- **Op-bounds invariant learned the hard way**: the vault slot was bounded
+  only by its AABB while the sdf leaked along the passage axis — ops
+  evaluate wherever their block list reaches, so phantom slot surfaces
+  appeared at list boundaries and the verifier caught missing vertices
+  (sign-scan clean, traversal divergent). CarveOp now documents the
+  contract: sdf <= 0 everywhere outside the declared bounds; the slot got
+  an explicit along-axis bound.
+- `IsoViewer.lookAtWorld(x, z, zoom)` + `window.__cw` dev hook: scripted
+  Playwright verification can now frame any world position instead of
+  blind wheel-zooming.
+
+**Same day — "washed foundation" basal erosion (user request):**
+
+- In the base density fill (volume.ts, not an op): an erosion notch cut
+  into wall faces — deepest at floor level, tapering to nothing over
+  `washHeight` — driven by the per-column 2D SDF (depth into the wall).
+  Gated by a map-wide LARGE-SCALE fBm mask (`washScale`, default 0.05 ->
+  ~20 wu patches; `washCoverage` sets the threshold) times a medium-scale
+  detail that scallops the grotto mouths, per explicit user direction that
+  the effect must be patchy, not map-wide. Never cuts below floor+0.12,
+  never outside walls (bounded by s2), so the flat playable floor and
+  passability are untouched.
+- Exactness: washed columns extend their classification band down to the
+  floor; the notch is strictly contained in gated columns, and the existing
+  ±1-column footprint padding covers edge reach into neighbors — verifier
+  stays byte-identical with wash at coverage 0.7 across all seeds/voxels.
+- Four sliders in "3D carve": base wash (depth), wash height, wash
+  coverage, wash scale. Look verified in-browser: washed stretches show
+  bright overhanging rims over deep-shadowed basal hollows; unwashed
+  stretches keep the crisp talus line. Gen ~500 ms at defaults.
+
+**Bug report: "bright spots at ground level next to walls in shadowed
+areas" with wash tweaked up.** Investigation (A/B with wash on/off,
+decor on/off, texture on/off at fixed cameras via the new lookAtWorld
+hook) found three stacked causes; all fixed:
+
+1. **Grazing notch ceiling** (geometry): the linear depth taper met the
+   wall face at a razor angle, smearing a band of sliver triangles.
+   Fixed: sqrt profile — vertical tangent at the top, the ceiling meets
+   the face in a crisp lip — plus a 0.04 erosion to trim sub-voxel
+   hairlines.
+2. **Mesa texture on grotto ceilings** (shader): the triplanar top
+   projection weights by |normal.y|⁴ and the plateau layer blended by
+   world-y only, so DOWN-facing notch ceilings above uTriPlateauY-1.2
+   received the pale slickrock texture. Fixed: plateau blend now
+   multiplied by a signed up-facing gate (smoothstep 0.15..0.5 of
+   normal.y). Note: pale patches on up-facing wall shoulders crossing the
+   y threshold exist WITHOUT wash and are part of the established look —
+   left alone.
+3. **Pierced wall bases** (the actual "bright spots in shadow"): at high
+   amp/coverage, notches washed from opposite faces of a thin wall met at
+   the base — real sunlight streamed through a gap under an intact-looking
+   lip and dappled the shadowed floor (the reporter's instinct said shadow
+   mapping; the shadow map was fine — the wall genuinely had holes).
+   Fixed: per-column pierce guard — march inward along -grad(s2); the
+   most-negative s2 on the ray IS the local half-thickness (the ray
+   crosses the medial and exits the far side, so neighboring walls can't
+   contaminate the estimate); clamp notch depth to keep a >=0.45 wu solid
+   core. Verified at worst-case settings (amp 1.6, coverage 1.0, sun 32°):
+   shadow bands read uniformly dark; verifier stays byte-identical.
+
+**Round 2 — user still saw "shine through" on wall undersides and was
+convinced it's shadow leaking (resolution?).** Settled empirically with a
+live A/B matrix at the exact artifact (window.__cw camera hook + Playwright
+page.evaluate): normalBias 0.2→0.02 — no change; bias -0.0008→-0.004 — no
+change; shadowSide DoubleSide — no change; 8K shadow map — no change; **sun
+intensity 0 — patches STILL THERE.** With no direct light there is no
+shadowing, so this is definitively pale ALBEDO under ambient, which the eye
+reads as leaked light inside a shadowed wall base. The shadow stack is
+healthy; don't re-litigate it (the experiment script pattern is in this
+entry's commit).
+
+Root cause: the plateau-cap color rule was `up-facing AND y > wallHeight *
+0.45 (≈2.34)` — ANY rounded knob above 2.34 turned bleached-cream, and the
+shader's mesa-texture layer used the same bare y smoothstep (weighted by
+abs(normal.y)^4, so even DOWN-facing grotto ceilings took it). Pure
+heightfield terrain never exposed this badly; the wash mass-produces
+rounded lips and knobs at wall bases right next to dark hollows.
+
+Fixes (all albedo-side):
+- `plateauWeight()` in mesher.ts: cap requires (near own column top) AND
+  (deep inside a wall region — smoothstep on -s2 — OR genuinely tall) AND
+  a minimum height. Sunken mesa tops keep their cap (interior test); arch
+  decks keep it (they rise above groundH, hEff = max(h, y) handles them);
+  basal knobs and wash lips are demoted to the floor branch.
+- `facies` attribute extended to vec3; `.z` = baked plateau weight; the
+  shader's triPlateau now uses the baked channel (plus the signed
+  up-facing gate from round 1) instead of the y smoothstep.
+- Floor-branch contact shading strengthened for up-facing surfaces ON the
+  wall footprint (s2 < 0): extra lerp toward CREVICE, so demoted benches
+  read as dark rock shelf, not bright sand.
+- Also kept from round 1 (real but secondary): sqrt notch profile (no
+  grazing sliver band), rock-overhead crevice tint via density probes
+  (grotto interiors darken), wash pierce guard.
+Verified at the two reported artifact walls: pale patches gone / demoted
+to warm rock; mesa tops, terraces and arch decks keep the established
+pale-cap look.
+
+**Round 3 — user still reports leak-like patches, requested a taller wash
+with the notch floor pinned to ground level.** Done + shadow hardening:
+
+- Notch bottom now sits exactly at floorBase (was floor+0.12 — the raised
+  step at mouths is gone); washHeight slider extended to 4.5 — tall washes
+  read as proper grottoes/galleries.
+- `terrainMaterial.shadowSide = THREE.DoubleSide`: with back-face-only
+  shadow depth (three.js default), thin rock — wash lips, remnant cores —
+  is a classic light-leak vector; both-faces depth makes even paper-thin
+  occluders reliable. No acne observed (normalBias 0.2 absorbs it).
+- Pierce-guard min core 0.45 -> 0.8 wu (thicker occluders), and the guard's
+  ray march reach extended to depth+0.9 — the old reach (depth+0.5) paired
+  with the old core; reusing it would have silently shaved 0.3 off EVERY
+  wash on thick walls (march can't see deeper than it walks).
+- Hunted for genuine shadow leaks with hemisphere light disabled (pure sun:
+  any leak glows against black): none found across six shadow-side walls at
+  amp 1.5 / height 3.5 / coverage 1.0. If a leak sighting persists, get the
+  exact spot + params and re-run the sun-off / hemi-off discriminator pair
+  there before touching the shadow stack.
+
 ## 2026-07-05 — v0.13: decorative mesa fog of war (look test)
 
 Goal: test a decorative "fog of war" veiling the large impassable mesa

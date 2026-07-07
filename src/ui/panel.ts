@@ -59,6 +59,19 @@ export function buildPanel(
   fProfile.add(params, 'floorAmp', 0, 1.2, 0.05).name('floor relief').onFinishChange(regen);
   fProfile.close();
 
+  const fCarve = gui.addFolder('3D carve');
+  fCarve.add(params, 'archCount', 0, 6, 1).name('arches').onFinishChange(regen);
+  fCarve.add(params, 'archDepth', 1, 5, 0.1).name('arch depth').onFinishChange(regen);
+  fCarve.add(params, 'archThickness', 0.3, 1.6, 0.05).name('cap thickness').onFinishChange(regen);
+  fCarve.add(params, 'archClearance', 1, 4, 0.1).name('clearance').onFinishChange(regen);
+  fCarve.add(params, 'archMaxSpan', 4, 12, 0.5).name('max span').onFinishChange(regen);
+  fCarve.add(params, 'windowCount', 0, 8, 1).name('fin windows').onFinishChange(regen);
+  fCarve.add(params, 'windowRadius', 0.4, 1.8, 0.05).name('window radius').onFinishChange(regen);
+  fCarve.add(params, 'washAmp', 0, 1.6, 0.05).name('base wash').onFinishChange(regen);
+  fCarve.add(params, 'washHeight', 0.4, 4.5, 0.05).name('wash height').onFinishChange(regen);
+  fCarve.add(params, 'washCoverage', 0, 1, 0.05).name('wash coverage').onFinishChange(regen);
+  fCarve.add(params, 'washScale', 0.02, 0.15, 0.005).name('wash scale').onFinishChange(regen);
+
   const fDecor = gui.addFolder('Decor');
   fDecor.add(params, 'craterCount', 0, 20, 1).name('craters').onFinishChange(regen);
   fDecor.add(params, 'craterDepth', 0.1, 1, 0.05).name('crater depth').onFinishChange(regen);

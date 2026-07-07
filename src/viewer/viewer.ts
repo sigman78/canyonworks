@@ -131,6 +131,14 @@ export class IsoViewer {
     this.camera.updateProjectionMatrix();
   }
 
+  /** center the view on a world position (dev/verification helper) */
+  lookAtWorld(x: number, z: number, zoom = 3): void {
+    this.target.set(x, 0, z);
+    this.camera.zoom = Math.min(10, Math.max(0.35, zoom));
+    this.camera.updateProjectionMatrix();
+    this.updateCamera();
+  }
+
   resize(): void {
     const w = this.container.clientWidth;
     const h = this.container.clientHeight;

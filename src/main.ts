@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { HexGrid } from './core/hex';
 import { makeNoise, type NoiseKit } from './core/noise';
+import { placeCarveOps } from './gen/carves';
 import { buildDecor } from './gen/decor';
 import { buildFields, computeObstructed, type Fields } from './gen/fields';
 import { generateLayout, largestComponent, type LayoutResult } from './gen/layout';
@@ -72,6 +73,9 @@ class App {
       metalness: 0,
       flatShading: this.render.flatShading,
     });
+    // both faces into the shadow map: wash notches leave thin lips/cores,
+    // and back-face-only shadow depth can leak light through thin rock
+    this.terrainMaterial.shadowSide = THREE.DoubleSide;
     this.syncDetailUniforms();
     applyTriplanarDetail(this.terrainMaterial, this.detailTex.cliff, this.detailTex.sand, this.detailU, {
       layers: {
@@ -139,7 +143,8 @@ class App {
     this.layout = generateLayout(this.grid, this.params, this.noise, edits);
     this.fields = buildFields(this.grid, this.layout.open, this.params, this.noise);
 
-    const terrain = buildTerrainGeometry(this.fields, this.params, this.noise);
+    const carves = placeCarveOps(this.grid, this.fields, this.params, this.noise);
+    const terrain = buildTerrainGeometry(this.fields, this.params, this.noise, carves);
 
     // swap scene content
     if (this.terrainMesh) {
@@ -397,4 +402,6 @@ function downloadJson(filename: string, data: unknown): void {
   URL.revokeObjectURL(url);
 }
 
-new App();
+const app = new App();
+// dev hook for scripted verification (Playwright): frame a world position
+(window as unknown as Record<string, unknown>).__cw = app;

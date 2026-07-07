@@ -1,9 +1,18 @@
 import * as THREE from 'three';
-import { fbm3, makeNoise } from './noise';
+import { fbm3, makeNoise, type NoiseKit } from './noise';
+import type { HexGrid } from './hex';
 import { placeCarveOps } from '../gen/carves';
+import type { GenParams } from '../gen/params';
+import { signedDistance } from '../gen/sdf2d';
 import { surfaceNets } from '../gen/surfacenets';
 import { buildDensityVolume } from '../gen/volume';
-import { buildVolume, initWasmGen, tryWasmColorize } from '../gen/volumeWasm';
+import {
+  buildVolume,
+  initWasmGen,
+  tryWasmColorize,
+  tryWasmFieldsProfile,
+  tryWasmSignedDistance,
+} from '../gen/volumeWasm';
 
 /**
  * WASM generator kernels (wasm/ crate, built by `npm run wasm:build`).
@@ -439,6 +448,154 @@ export async function colorParity(): Promise<{
     colorMaxDiff: color.max,
     faciesExactDiff: facies.exact,
     faciesMaxDiff: facies.max,
+    jsMs: Math.round(jsMs * 10) / 10,
+    wasmMs: Math.round(wasmMs * 10) / 10,
+  };
+}
+
+/**
+ * Fields parity/bench (stage 6): checks BOTH fields kernels against the
+ * running app's map.
+ *
+ * 1. Signed distance: replicates buildFields' openRaster rasterization
+ *    (step 1, copied verbatim) and runs the JS signedDistance vs the wasm
+ *    signed_distance on the SAME raster, comparing in CELL units — BEFORE
+ *    the `* voxel` scaling that buildFields applies afterwards. Expected
+ *    exactly zero (pure f64 EDT + IEEE sqrt).
+ * 2. Ground profile: builds a reference Fields with wasmGen forced OFF
+ *    (pure JS end to end), then re-runs the profile step on the SAME
+ *    flattened inputs — buildFields keeps its intermediates (flattenW,
+ *    flatRaw, mesaOff) on the returned Fields precisely for this — via the
+ *    JS fieldsProfileJs (timed) and the wasm fields_profile (timed), and
+ *    diffs groundH/wallMask/craterD/maxH against the reference. NOT
+ *    guaranteed exactly zero: crater bowls/rims and talus use
+ *    Math.cos/Math.exp (V8 vs libm ~1 ULP, see wasm/src/fields.rs).
+ *    Expected: near-zero exactDiff counts, tiny maxDiff.
+ *
+ * Usage (dev console / Playwright): `await __cwWasm.fieldsParity()`
+ */
+export async function fieldsParity(): Promise<{
+  cols: number;
+  sdExactDiff: number;
+  sdMaxDiff: number;
+  groundExactDiff: number;
+  groundMaxDiff: number;
+  wallExactDiff: number;
+  craterExactDiff: number;
+  maxHDiff: number;
+  jsMs: number;
+  wasmMs: number;
+}> {
+  await initWasmGen();
+  // dynamic import: gen/fields imports gen/volumeWasm which imports this
+  // module — a static fields import here would close the cycle in the
+  // static graph (same reasoning as the mesher imports above)
+  const { buildFields, fieldsProfileJs } = await import('../gen/fields');
+  const app = (window as unknown as { __cw?: unknown }).__cw as
+    | {
+        grid: HexGrid;
+        layout: { open: Uint8Array };
+        params: GenParams;
+        noise: NoiseKit;
+      }
+    | undefined;
+  if (!app) throw new Error('[wasm-fields] window.__cw not found — run inside the app');
+  const { grid, layout, params, noise } = app;
+  const open = layout.open;
+
+  // --- signed distance: replicate buildFields step 1 (verbatim copy) so
+  // both EDTs see the exact same raster ---
+  const voxel = params.voxelSize;
+  const pad = params.wallThickness + 1.5;
+  const originX = grid.minX - pad;
+  const originZ = grid.minZ - pad;
+  const nx = Math.ceil((grid.maxX + pad - originX) / voxel) + 1;
+  const nz = Math.ceil((grid.maxZ + pad - originZ) / voxel) + 1;
+  const n = nx * nz;
+  const openRaster = new Uint8Array(n);
+  for (let iz = 0; iz < nz; iz++) {
+    const z = originZ + iz * voxel;
+    for (let ix = 0; ix < nx; ix++) {
+      const x = originX + ix * voxel;
+      let [col, row] = grid.worldToCell(x, z);
+      col = Math.max(0, Math.min(grid.cols - 1, col));
+      row = Math.max(0, Math.min(grid.rows - 1, row));
+      if (open[grid.index(col, row)]) openRaster[iz * nx + ix] = 1;
+    }
+  }
+
+  const jsSd = signedDistance(openRaster, nx, nz);
+  const wasmSd = tryWasmSignedDistance(openRaster, nx, nz, { ...params, wasmGen: true });
+  if (!wasmSd) throw new Error('[wasm-fields] wasm module not ready');
+
+  const compare = (a: Float32Array, b: Float32Array): { exact: number; max: number } => {
+    let exact = Math.abs(a.length - b.length);
+    let max = 0;
+    const m = Math.min(a.length, b.length);
+    for (let i = 0; i < m; i++) {
+      if (a[i] !== b[i]) {
+        exact++;
+        const d = Math.abs(a[i] - b[i]);
+        if (d > max) max = d;
+      }
+    }
+    return { exact, max };
+  };
+  const sd = compare(jsSd, wasmSd);
+
+  // --- ground profile: reference Fields via the pure-JS path (wasmGen OFF),
+  // then both profile kernels on the SAME intermediates it carries ---
+  const ref = buildFields(grid, open, { ...params, wasmGen: false }, noise);
+
+  const t0 = performance.now();
+  fieldsProfileJs(
+    ref.nx,
+    ref.nz,
+    ref.voxel,
+    ref.originX,
+    ref.originZ,
+    ref.s2,
+    ref.crackD,
+    ref.flattenW,
+    ref.flatRaw,
+    ref.mesaOff,
+    ref.craters,
+    params,
+    noise,
+  );
+  const jsMs = performance.now() - t0;
+
+  const t1 = performance.now();
+  const wasm = tryWasmFieldsProfile(
+    ref.nx,
+    ref.nz,
+    ref.voxel,
+    ref.originX,
+    ref.originZ,
+    ref.s2,
+    ref.crackD,
+    ref.flattenW,
+    ref.flatRaw,
+    ref.mesaOff,
+    ref.craters,
+    { ...params, wasmGen: true },
+  );
+  const wasmMs = performance.now() - t1;
+  if (!wasm) throw new Error('[wasm-fields] wasm module not ready');
+
+  const ground = compare(ref.groundH, wasm.groundH);
+  const wall = compare(ref.wallMask, wasm.wallMask);
+  const crater = compare(ref.craterD, wasm.craterD);
+
+  return {
+    cols: n,
+    sdExactDiff: sd.exact,
+    sdMaxDiff: sd.max,
+    groundExactDiff: ground.exact,
+    groundMaxDiff: ground.max,
+    wallExactDiff: wall.exact,
+    craterExactDiff: crater.exact,
+    maxHDiff: Math.abs(ref.maxH - wasm.maxH),
     jsMs: Math.round(jsMs * 10) / 10,
     wasmMs: Math.round(wasmMs * 10) / 10,
   };

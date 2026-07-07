@@ -274,6 +274,25 @@ pub fn smoothstep(a: f64, b: f64, x: f64) -> f64 {
     t * t * (3.0 - 2.0 * t)
 }
 
+/// core/noise.ts `clamp01`: branch-for-branch JS ternary (NaN passes
+/// through both comparisons and returns NaN, same as JS).
+#[inline(always)]
+pub fn clamp01(v: f64) -> f64 {
+    if v < 0.0 {
+        0.0
+    } else if v > 1.0 {
+        1.0
+    } else {
+        v
+    }
+}
+
+/// core/noise.ts `lerp(a, b, t)`: a + (b - a) * t, same operation order.
+#[inline(always)]
+pub fn lerp(a: f64, b: f64, t: f64) -> f64 {
+    a + (b - a) * t
+}
+
 pub fn ridged2(n: &Noise2, x: f64, y: f64, octaves: u32) -> f64 {
     let mut amp = 0.5;
     let mut freq = 1.0;

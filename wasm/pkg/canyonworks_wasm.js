@@ -38,6 +38,60 @@ export class ColorizeResult {
 }
 if (Symbol.dispose) ColorizeResult.prototype[Symbol.dispose] = ColorizeResult.prototype.free;
 
+export class FieldsProfileResult {
+    static __wrap(ptr) {
+        const obj = Object.create(FieldsProfileResult.prototype);
+        obj.__wbg_ptr = ptr;
+        FieldsProfileResultFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+    }
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        FieldsProfileResultFinalization.unregister(this);
+        return ptr;
+    }
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_fieldsprofileresult_free(ptr, 0);
+    }
+    /**
+     * @returns {Float32Array}
+     */
+    get crater_d() {
+        const ret = wasm.fieldsprofileresult_crater_d(this.__wbg_ptr);
+        var v1 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
+    }
+    /**
+     * @returns {Float32Array}
+     */
+    get ground_h() {
+        const ret = wasm.fieldsprofileresult_ground_h(this.__wbg_ptr);
+        var v1 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
+    }
+    /**
+     * @returns {number}
+     */
+    get max_h() {
+        const ret = wasm.fieldsprofileresult_max_h(this.__wbg_ptr);
+        return ret;
+    }
+    /**
+     * @returns {Float32Array}
+     */
+    get wall_mask() {
+        const ret = wasm.fieldsprofileresult_wall_mask(this.__wbg_ptr);
+        var v1 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
+    }
+}
+if (Symbol.dispose) FieldsProfileResult.prototype[Symbol.dispose] = FieldsProfileResult.prototype.free;
+
 export class NetsResult {
     static __wrap(ptr) {
         const obj = Object.create(NetsResult.prototype);
@@ -328,6 +382,50 @@ export function colorize(positions, normals, data, nx, ny, nz, voxel, origin_x, 
 }
 
 /**
+ * Port of the fields.ts step-7 per-column ground-profile loop
+ * (`fieldsProfileJs` on the TS side): floor noise + crater bowls/rims +
+ * talus + wall profile (plateau quantization, per-mesa offset, doming,
+ * terraced strata, gullies) + hex flattening + fissure carving.
+ *
+ * Inputs: `s2` is the signed distance ALREADY scaled to world units by the
+ * caller; `craters` is 4-stride [x, z, r, depth]; `params` uses the FIELDS
+ * PARAMS order in the module doc. The loop only uses the 2D noise channel:
+ * `Noise2::new(seed ^ 0x2f6e2b1)`, the same derivation as NoiseKit.
+ * @param {number} nx
+ * @param {number} nz
+ * @param {number} voxel
+ * @param {number} origin_x
+ * @param {number} origin_z
+ * @param {Float32Array} s2
+ * @param {Float32Array} crack_d
+ * @param {Float32Array} flatten_w
+ * @param {Uint8Array} flat_raw
+ * @param {Float32Array} mesa_off
+ * @param {Float64Array} craters
+ * @param {Float64Array} params
+ * @param {number} seed
+ * @returns {FieldsProfileResult}
+ */
+export function fields_profile(nx, nz, voxel, origin_x, origin_z, s2, crack_d, flatten_w, flat_raw, mesa_off, craters, params, seed) {
+    const ptr0 = passArrayF32ToWasm0(s2, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArrayF32ToWasm0(crack_d, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passArrayF32ToWasm0(flatten_w, wasm.__wbindgen_malloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ptr3 = passArray8ToWasm0(flat_raw, wasm.__wbindgen_malloc);
+    const len3 = WASM_VECTOR_LEN;
+    const ptr4 = passArrayF32ToWasm0(mesa_off, wasm.__wbindgen_malloc);
+    const len4 = WASM_VECTOR_LEN;
+    const ptr5 = passArrayF64ToWasm0(craters, wasm.__wbindgen_malloc);
+    const len5 = WASM_VECTOR_LEN;
+    const ptr6 = passArrayF64ToWasm0(params, wasm.__wbindgen_malloc);
+    const len6 = WASM_VECTOR_LEN;
+    const ret = wasm.fields_profile(nx, nz, voxel, origin_x, origin_z, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, ptr5, len5, ptr6, len6, seed);
+    return FieldsProfileResult.__wrap(ret);
+}
+
+/**
  * Port of buildDensityVolume() minus carve-op SDF evaluation (ops stay in
  * JS); op bounds are still consumed here to force affected blocks MIXED.
  *
@@ -364,6 +462,25 @@ export function fill_volume(seed, nx, ny, nz, voxel, origin_x, origin_z, ground_
     const len4 = WASM_VECTOR_LEN;
     const ret = wasm.fill_volume(seed, nx, ny, nz, voxel, origin_x, origin_z, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, force_all_mixed);
     return VolumeResult.__wrap(ret);
+}
+
+/**
+ * Port of sdf2d.ts `signedDistance()`: signed distance in CELL units,
+ * positive inside the open region, negative inside walls. The `* voxel`
+ * world-unit scaling happens in the TS caller (fields.ts step 2), NOT here.
+ * Expected bit-identical to the JS (sqrt is IEEE-exact).
+ * @param {Uint8Array} open_raster
+ * @param {number} nx
+ * @param {number} nz
+ * @returns {Float32Array}
+ */
+export function signed_distance(open_raster, nx, nz) {
+    const ptr0 = passArray8ToWasm0(open_raster, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.signed_distance(ptr0, len0, nx, nz);
+    var v2 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+    return v2;
 }
 
 /**
@@ -416,6 +533,9 @@ function __wbg_get_imports() {
 const ColorizeResultFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_colorizeresult_free(ptr, 1));
+const FieldsProfileResultFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_fieldsprofileresult_free(ptr, 1));
 const NetsResultFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_netsresult_free(ptr, 1));

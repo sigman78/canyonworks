@@ -7,12 +7,14 @@
 
 mod ao;
 mod colorize;
+mod fields;
 mod nets;
 mod noise;
 mod volume;
 
 pub use ao::bake_ao;
 pub use colorize::{colorize, ColorizeResult};
+pub use fields::{fields_profile, signed_distance, FieldsProfileResult};
 pub use nets::{surface_nets, NetsResult};
 pub use volume::{fill_volume, VolumeResult};
 

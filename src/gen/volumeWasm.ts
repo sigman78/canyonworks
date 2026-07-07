@@ -1,7 +1,7 @@
 import type { NoiseKit } from '../core/noise';
 import { wasmGen } from '../core/wasmGen';
 import type { CarveOp } from './carves';
-import type { Fields } from './fields';
+import type { Crater, Fields } from './fields';
 import type { GenParams } from './params';
 import { surfaceNets, type NetsResult } from './surfacenets';
 import { BLOCK, buildDensityVolume, type DensityVolume } from './volume';
@@ -189,6 +189,119 @@ export function tryWasmColorize(
   };
   console.debug(`[wasm-color] ${(performance.now() - t0).toFixed(1)}ms (wasm)`);
   return out;
+}
+
+/**
+ * Signed-distance dispatcher (stage 6a): wasm attempt only — returns null
+ * when `params.wasmGen === false` or the module hasn't finished loading, and
+ * the CALLER (buildFields step 2 in ./fields) falls back to the pure-JS
+ * signedDistance in ./sdf2d. Returns CELL units exactly like sdf2d.ts — the
+ * `* voxel` world-unit scaling stays in buildFields. Expected bit-identical
+ * to the JS (pure f64 EDT, IEEE sqrt).
+ */
+export function tryWasmSignedDistance(
+  openRaster: Uint8Array,
+  nx: number,
+  nz: number,
+  params: GenParams,
+): Float32Array | null {
+  if (params.wasmGen === false || wasmModule === null) return null;
+  const t0 = performance.now();
+  // generated .d.ts may lag signed_distance — cast through `any` at this one
+  // call, same pattern as fill_volume/surface_nets/bake_ao/colorize above
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const out = (wasmModule as any).signed_distance(openRaster, nx >>> 0, nz >>> 0) as Float32Array;
+  console.debug(`[wasm-fields] sdf ${(performance.now() - t0).toFixed(1)}ms (wasm)`);
+  return out;
+}
+
+/**
+ * Ground-profile dispatcher (stage 6b): wasm attempt only — returns null
+ * when `params.wasmGen === false` or the module hasn't finished loading, and
+ * the CALLER (buildFields step 7 in ./fields) falls back to the pure-JS
+ * fieldsProfileJs there. `s2` must be ALREADY voxel-scaled (world units);
+ * craters are flattened 4-stride [x, z, r, depth]. NOT guaranteed exactly
+ * zero: the crater bowl/rim and talus math use Math.cos/Math.exp — V8 vs
+ * libm may differ by ~1 ULP (see wasm/src/fields.rs). Expected parity:
+ * near-or-exactly identical, tiny maxDiff.
+ */
+export function tryWasmFieldsProfile(
+  nx: number,
+  nz: number,
+  voxel: number,
+  originX: number,
+  originZ: number,
+  s2: Float32Array,
+  crackD: Float32Array,
+  flattenW: Float32Array,
+  flatRaw: Uint8Array,
+  mesaOff: Float32Array,
+  craters: readonly Crater[],
+  params: GenParams,
+): { groundH: Float32Array; wallMask: Float32Array; craterD: Float32Array; maxH: number } | null {
+  if (params.wasmGen === false || wasmModule === null) return null;
+  const t0 = performance.now();
+  const cratersFlat = new Float64Array(craters.length * 4);
+  for (let i = 0; i < craters.length; i++) {
+    const c = craters[i];
+    cratersFlat[i * 4] = c.x;
+    cratersFlat[i * 4 + 1] = c.z;
+    cratersFlat[i * 4 + 2] = c.r;
+    cratersFlat[i * 4 + 3] = c.depth;
+  }
+  // generated .d.ts may lag fields_profile/FieldsProfileResult — cast
+  // through `any` at this one call, same pattern as the kernels above
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const res = (wasmModule as any).fields_profile(
+    nx >>> 0,
+    nz >>> 0,
+    voxel,
+    originX,
+    originZ,
+    s2,
+    crackD,
+    flattenW,
+    flatRaw,
+    mesaOff,
+    cratersFlat,
+    flattenFieldsParams(params),
+    params.seed >>> 0,
+  );
+  const out = {
+    groundH: res.ground_h as Float32Array,
+    wallMask: res.wall_mask as Float32Array,
+    craterD: res.crater_d as Float32Array,
+    maxH: res.max_h as number,
+  };
+  console.debug(`[wasm-fields] profile ${(performance.now() - t0).toFixed(1)}ms (wasm)`);
+  return out;
+}
+
+/**
+ * FIELDS PARAMS vector order — MUST match wasm/src/fields.rs exactly:
+ * [0] ridgeFreq, [1] ridgeAmp, [2] floorBase, [3] floorFreq, [4] floorAmp,
+ * [5] talusAmp, [6] talusFall, [7] wallThickness, [8] wallHeight,
+ * [9] wallFreq, [10] wallVar, [11] terraceStep, [12] terraceAmt,
+ * [13] terraceSharp, [14] crackDepth.
+ */
+export function flattenFieldsParams(params: GenParams): Float64Array {
+  return new Float64Array([
+    params.ridgeFreq, // 0
+    params.ridgeAmp, // 1
+    params.floorBase, // 2
+    params.floorFreq, // 3
+    params.floorAmp, // 4
+    params.talusAmp, // 5
+    params.talusFall, // 6
+    params.wallThickness, // 7
+    params.wallHeight, // 8
+    params.wallFreq, // 9
+    params.wallVar, // 10
+    params.terraceStep, // 11
+    params.terraceAmt, // 12
+    params.terraceSharp, // 13
+    params.crackDepth, // 14
+  ]);
 }
 
 /**

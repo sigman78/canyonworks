@@ -4,6 +4,11 @@ import { clamp01, fbm2, lerp, ridged2, smoothstep, type NoiseKit } from '../core
 import { signedDistance } from './sdf2d';
 import { hexNeighbors } from './layout';
 import type { GenParams } from './params';
+// runtime-safe import: volumeWasm imports this module TYPES-only (`type
+// Fields`/`type Crater`) and its other imports (core/wasmGen -> gen/carves /
+// gen/volume) also reach fields as types only, so no evaluation-order cycle
+// exists — the dispatchers are only referenced from function bodies here
+import { tryWasmFieldsProfile, tryWasmSignedDistance } from './volumeWasm';
 
 export interface Crater {
   x: number;
@@ -55,6 +60,14 @@ export interface Fields {
   hexFlat: Uint8Array;
   craters: Crater[];
   cracks: Crack[];
+  /**
+   * ground-profile intermediates, kept on the result so the fieldsParity
+   * harness (core/wasmGen.ts) can re-run the profile step on identical
+   * inputs without re-deriving them. Additive — nothing else reads them.
+   */
+  flattenW: Float32Array;
+  flatRaw: Uint8Array;
+  mesaOff: Float32Array;
   maxH: number;
   sampleGround(x: number, z: number): number;
   sampleS2(x: number, z: number): number;
@@ -90,8 +103,9 @@ export function buildFields(
     }
   }
 
-  // 2. signed 2D distance field (world units)
-  const s2 = signedDistance(openRaster, nx, nz);
+  // 2. signed 2D distance field: wasm EDT when available (bit-identical),
+  // else the JS one; the voxel scaling to world units stays HERE either way
+  const s2 = tryWasmSignedDistance(openRaster, nx, nz, params) ?? signedDistance(openRaster, nx, nz);
   for (let i = 0; i < n; i++) s2[i] *= voxel;
 
   // 3. craters on the open floor, fissures walked over the hex grid
@@ -152,7 +166,73 @@ export function buildFields(
   // as one uniform slab
   const mesaOff = mesaOffsets(openRaster, nx, nz, params);
 
-  // 7. per-column ground profile
+  // 7. per-column ground profile: wasm kernel when available, else the pure
+  // JS loop (same inputs either way; see fieldsProfileJs)
+  const { groundH, wallMask, craterD, maxH } =
+    tryWasmFieldsProfile(nx, nz, voxel, originX, originZ, s2, crackD, flattenW, flatRaw, mesaOff, craters, params) ??
+    fieldsProfileJs(nx, nz, voxel, originX, originZ, s2, crackD, flattenW, flatRaw, mesaOff, craters, params, noise);
+
+  const sample = (arr: Float32Array) => (x: number, z: number): number => {
+    const fx = (x - originX) / voxel;
+    const fz = (z - originZ) / voxel;
+    const x0 = Math.max(0, Math.min(nx - 2, Math.floor(fx)));
+    const z0 = Math.max(0, Math.min(nz - 2, Math.floor(fz)));
+    const tx = clamp01(fx - x0);
+    const tz = clamp01(fz - z0);
+    const i00 = z0 * nx + x0;
+    const a = arr[i00] + (arr[i00 + 1] - arr[i00]) * tx;
+    const b = arr[i00 + nx] + (arr[i00 + nx + 1] - arr[i00 + nx]) * tx;
+    return a + (b - a) * tz;
+  };
+
+  return {
+    nx,
+    nz,
+    voxel,
+    originX,
+    originZ,
+    s2,
+    groundH,
+    wallMask,
+    craterD,
+    crackD,
+    hexFlat,
+    craters,
+    cracks,
+    flattenW,
+    flatRaw,
+    mesaOff,
+    maxH,
+    sampleGround: sample(groundH),
+    sampleS2: sample(s2),
+    sampleCrack: sample(crackD),
+  };
+}
+
+/**
+ * Step 7 of buildFields as a pure function: the per-column ground profile
+ * (floor noise + crater bowls/rims + talus + wall profile + hex flattening
+ * + fissure carving). `s2` must be ALREADY voxel-scaled (world units).
+ * Ported to Rust as `fields_profile` (wasm/src/fields.rs) — buildFields
+ * dispatches there via tryWasmFieldsProfile when the module is ready, and
+ * this JS body is the fallback (and the parity reference).
+ */
+export function fieldsProfileJs(
+  nx: number,
+  nz: number,
+  voxel: number,
+  originX: number,
+  originZ: number,
+  s2: Float32Array,
+  crackD: Float32Array,
+  flattenW: Float32Array,
+  flatRaw: Uint8Array,
+  mesaOff: Float32Array,
+  craters: readonly Crater[],
+  params: GenParams,
+  noise: NoiseKit,
+): { groundH: Float32Array; wallMask: Float32Array; craterD: Float32Array; maxH: number } {
+  const n = nx * nz;
   const groundH = new Float32Array(n);
   const wallMask = new Float32Array(n);
   const craterD = new Float32Array(n).fill(9);
@@ -260,38 +340,7 @@ export function buildFields(
     }
   }
 
-  const sample = (arr: Float32Array) => (x: number, z: number): number => {
-    const fx = (x - originX) / voxel;
-    const fz = (z - originZ) / voxel;
-    const x0 = Math.max(0, Math.min(nx - 2, Math.floor(fx)));
-    const z0 = Math.max(0, Math.min(nz - 2, Math.floor(fz)));
-    const tx = clamp01(fx - x0);
-    const tz = clamp01(fz - z0);
-    const i00 = z0 * nx + x0;
-    const a = arr[i00] + (arr[i00 + 1] - arr[i00]) * tx;
-    const b = arr[i00 + nx] + (arr[i00 + nx + 1] - arr[i00 + nx]) * tx;
-    return a + (b - a) * tz;
-  };
-
-  return {
-    nx,
-    nz,
-    voxel,
-    originX,
-    originZ,
-    s2,
-    groundH,
-    wallMask,
-    craterD,
-    crackD,
-    hexFlat,
-    craters,
-    cracks,
-    maxH,
-    sampleGround: sample(groundH),
-    sampleS2: sample(s2),
-    sampleCrack: sample(crackD),
-  };
+  return { groundH, wallMask, craterD, maxH };
 }
 
 /**

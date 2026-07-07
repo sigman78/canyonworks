@@ -1,5 +1,33 @@
 # Worklog
 
+## 2026-07-06 — WASM fields kernels (feature/wasm-gen, stage 6)
+
+Two fields kernels ported (`wasm/src/fields.rs`): the Felzenszwalb
+exact EDT (`signed_distance`, cell units — voxel scaling stays in the
+TS caller) and the per-column ground-profile loop (`fields_profile`:
+ridge/floor fbm, crater bowls/rims, talus, wall height + mesa offsets +
+doming, terracing with phase jitter, gullies, hex flattening, crack
+notches). Hex rasterization, RNG crater/crack placement, box blurs and
+mesa flood fill stay in TS (cheap, branchy, grid-coupled). Fields now
+also carries flattenW/flatRaw/mesaOff as parity-support intermediates.
+
+Parity: **all-zero on both seeds** — EDT exact, groundH/wallMask/
+craterD/maxH exact (cos/exp transcendentals matched V8 again). That is
+6/6 kernels byte-identical; per-seed reproducibility fully preserved
+through the whole wasm generator.
+
+Pipeline table (4-run avg, wasm vs js):
+  fields       32.6 -> 21.8 ms  (1.5×)
+  volumeFill   90.2 -> 62.3 ms  (1.45×)
+  surfaceNets  36.3 -> 13.7 ms  (2.65×)
+  aoBake       92.6 -> 39.0 ms  (2.37×)
+  colorize     42.0 -> 22.0 ms  (1.91×)
+  total       372   -> 238 ms   (1.57× end-to-end)
+Remaining JS: fogOverlays ~55 ms (three.js object building — not a
+wasm candidate), normals ~11 ms, decor/layout/carves ~12 ms. The
+generator math is now essentially all-wasm; further wins are
+structural (SIMD batch noise, threads) rather than more ports.
+
 ## 2026-07-06 — WASM colorize (feature/wasm-gen, stage 5)
 
 colorize ported (`wasm/src/colorize.rs`): bilinear field samplers over

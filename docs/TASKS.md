@@ -249,11 +249,15 @@
 - [x] Per-stage perf tracking at TS call sites (core/perf.ts +
       __cwWasm.pipelineBench): volumeFill 1.35×, nets 2.4×, total
       345 -> 307 ms; control stages hold 1.0×
-- [ ] AO bake port — biggest JS stage left (~89 ms; 12-dir × 4-radius
-      probes, SIMD/thread-friendly)
+- [x] AO bake port: byte-identical, 2.37× (biggest single win)
+- [x] colorize port: byte-identical (palette crosses per call), 1.91×
+- [x] fields kernels port (EDT + profile loop): byte-identical, 1.5×;
+      placement/rasters stay TS. Pipeline total 372 -> 238 ms (1.57×)
 - [ ] SIMD batch evaluation (4-wide v128 noise) and/or f32 kernels —
       the structural speedups the scalar port can't reach
 - [ ] Zero-copy views + fill/nets fusion once carve ops move wasm-side
+- [ ] Maybe: computeVertexNormals in wasm (~11 ms); fogOverlays is
+      three.js object building — not portable
 - [ ] Optional: rayon threads behind wasm-bindgen-rayon + a
       coi-serviceworker shim for GH Pages (SharedArrayBuffer headers)
 

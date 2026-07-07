@@ -9,6 +9,16 @@ export class ColorizeResult {
     readonly facies: Float32Array;
 }
 
+export class FieldsProfileResult {
+    private constructor();
+    free(): void;
+    [Symbol.dispose](): void;
+    readonly crater_d: Float32Array;
+    readonly ground_h: Float32Array;
+    readonly max_h: number;
+    readonly wall_mask: Float32Array;
+}
+
 export class NetsResult {
     private constructor();
     free(): void;
@@ -71,6 +81,19 @@ export function bake_ao(positions: Float32Array, normals: Float32Array, data: Fl
 export function colorize(positions: Float32Array, normals: Float32Array, data: Float32Array, nx: number, ny: number, nz: number, voxel: number, origin_x: number, origin_z: number, fnx: number, fnz: number, fvoxel: number, forigin_x: number, forigin_z: number, ground_h: Float32Array, s2: Float32Array, crack_d: Float32Array, crater_d: Float32Array, params: Float64Array, palette: Float64Array, seed: number): ColorizeResult;
 
 /**
+ * Port of the fields.ts step-7 per-column ground-profile loop
+ * (`fieldsProfileJs` on the TS side): floor noise + crater bowls/rims +
+ * talus + wall profile (plateau quantization, per-mesa offset, doming,
+ * terraced strata, gullies) + hex flattening + fissure carving.
+ *
+ * Inputs: `s2` is the signed distance ALREADY scaled to world units by the
+ * caller; `craters` is 4-stride [x, z, r, depth]; `params` uses the FIELDS
+ * PARAMS order in the module doc. The loop only uses the 2D noise channel:
+ * `Noise2::new(seed ^ 0x2f6e2b1)`, the same derivation as NoiseKit.
+ */
+export function fields_profile(nx: number, nz: number, voxel: number, origin_x: number, origin_z: number, s2: Float32Array, crack_d: Float32Array, flatten_w: Float32Array, flat_raw: Uint8Array, mesa_off: Float32Array, craters: Float64Array, params: Float64Array, seed: number): FieldsProfileResult;
+
+/**
  * Port of buildDensityVolume() minus carve-op SDF evaluation (ops stay in
  * JS); op bounds are still consumed here to force affected blocks MIXED.
  *
@@ -81,6 +104,14 @@ export function colorize(positions: Float32Array, normals: Float32Array, data: F
  * `op_bounds` is 6 f64 per op: [minX, maxX, minY, maxY, minZ, maxZ].
  */
 export function fill_volume(seed: number, nx: number, ny: number, nz: number, voxel: number, origin_x: number, origin_z: number, ground_h: Float32Array, wall_mask: Float32Array, s2: Float32Array, params: Float64Array, op_bounds: Float64Array, force_all_mixed: boolean): VolumeResult;
+
+/**
+ * Port of sdf2d.ts `signedDistance()`: signed distance in CELL units,
+ * positive inside the open region, negative inside walls. The `* voxel`
+ * world-unit scaling happens in the TS caller (fields.ts step 2), NOT here.
+ * Expected bit-identical to the JS (sqrt is IEEE-exact).
+ */
+export function signed_distance(open_raster: Uint8Array, nx: number, nz: number): Float32Array;
 
 /**
  * Port of surfaceNets(): one vertex per sign-crossing cell (centroid of
@@ -94,12 +125,18 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly __wbg_colorizeresult_free: (a: number, b: number) => void;
+    readonly __wbg_fieldsprofileresult_free: (a: number, b: number) => void;
     readonly __wbg_noisekit_free: (a: number, b: number) => void;
     readonly __wbg_volumeresult_free: (a: number, b: number) => void;
     readonly bake_ao: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number];
     readonly colorize: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number, s: number, t: number, u: number, v: number, w: number, x: number, y: number, z: number, a1: number, b1: number, c1: number, d1: number) => number;
     readonly colorizeresult_colors: (a: number) => [number, number];
     readonly colorizeresult_facies: (a: number) => [number, number];
+    readonly fields_profile: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number, s: number, t: number) => number;
+    readonly fieldsprofileresult_crater_d: (a: number) => [number, number];
+    readonly fieldsprofileresult_ground_h: (a: number) => [number, number];
+    readonly fieldsprofileresult_max_h: (a: number) => number;
+    readonly fieldsprofileresult_wall_mask: (a: number) => [number, number];
     readonly fill_volume: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number) => number;
     readonly noisekit_fbm2: (a: number, b: number, c: number, d: number) => number;
     readonly noisekit_fbm3: (a: number, b: number, c: number, d: number, e: number) => number;
@@ -108,6 +145,7 @@ export interface InitOutput {
     readonly noisekit_noise2: (a: number, b: number, c: number) => number;
     readonly noisekit_noise3: (a: number, b: number, c: number, d: number) => number;
     readonly noisekit_ridged2: (a: number, b: number, c: number, d: number) => number;
+    readonly signed_distance: (a: number, b: number, c: number, d: number) => [number, number];
     readonly surface_nets: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number) => number;
     readonly volumeresult_block_type: (a: number) => [number, number];
     readonly volumeresult_data: (a: number) => [number, number];

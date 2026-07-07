@@ -1,5 +1,485 @@
 # Worklog
 
+## 2026-07-06 — v0.16 (research/voxel3d): real normal maps + texture albedo blend
+
+Rendering/textures track kickoff (user: textures read as "monochrome
+addition to vertex colors", bump is "an embossing shader trick"; wants real
+bump + a control for texture-own-color vs vertex-propagated color; art
+direction stays stylized-painterly).
+
+- `src/viewer/normalMaps.ts`: tangent-space normal maps baked AT LOAD from
+  the detail textures (luminance height field mixed with a 1/8-scale copy
+  for broad forms, Sobel with mirrored wrap, flipY matched to
+  TextureLoader). No offline asset step — regenerating textures via
+  gen-textures.mjs automatically yields matching normals next run. ~1 s
+  async for 3×1024², flat placeholders until ready.
+- terrainMaterial: true tri-planar normal mapping (UDN swizzle per
+  projection, world→view) for the three dominant surfaces — cliff sides,
+  floor base, mesa top — gated by the `normalMaps` option so decor keeps
+  the old emboss (also keeps the fragment-sampler count under the GL 16
+  limit; accent patch layers dunes/gravel/etc. deliberately have no bump
+  now). **Trap found on the way: the perturbation must MODIFY the existing
+  view-space normal, not rebuild from the smooth vertex normal — replacing
+  it silently discards the flat-shading facets and the whole diorama goes
+  airbrushed-soft.**
+- `tex albedo` slider (Render tweaks, default 0.3): crossfade between the
+  classic multiplicative tint (vertex palette in charge) and the texture's
+  OWN color modulated by the palette's luminance (light/dark structure —
+  crevice shade, cap brightness — survives; hue/chroma come from the
+  texture). At 1.0 the map goes noticeably browner/photographic; 0.2-0.4
+  enriches hue while keeping the Sedona grading.
+- Verified in-browser via slider A/B screenshots: bump 1.2 gives real
+  directional relief on strata (reads at grazing angles where the emboss
+  flattened); facets intact; decor unchanged.
+
+**Feedback round (same day):** texture under-pronounced (detail contrast
+1.35 helps — slider max raised to 2), wants more bumpiness, and decor
+looked desynced (still on the oversharpened emboss).
+
+- Bake strength 2.4 -> 4.5, fine/broad height mix 0.7/0.3.
+- Decor now shares the real normal-map path (rock.jpg baked, one map in
+  all three projection slots) — desync gone.
+- Accent patches (dunes/gravel/crater/drift/rubble) got their emboss bump
+  back, masked to the patches so the normal-mapped base isn't
+  double-bumped. GPU TRAP: the first version branched on the mask, but
+  triGradH uses dFdx/dFdy and screen derivatives inside divergent control
+  flow are undefined — dashed speckle artifacts exactly along mask edges.
+  Derivatives must stay in uniform control flow: compute unconditionally,
+  weight by the mask.
+- **`legacy shading` toggle** (Render tweaks, user request): uniform-driven
+  runtime A/B — 1 restores the full pre-v0.16 pipeline (all-projection
+  emboss, no normal maps, albedo blend forced off) with zero shader
+  recompile. Uniform branches keep derivatives defined.
+
+**GenAI normal-map experiment** (user asked "turn texture into normal map
+via GenAI — will it work?"; tools/gen-normalmap-test.mjs, outputs in
+tools/nmap-test/, gitignored): asked nano-banana2 for (a) a tangent-space
+normal map and (b) a grayscale height map of cliff.jpg, image-to-image.
+First verdict with a GENERIC prompt: not usable — redrawn layout AND
+cartoon-quantized vectors (flat lavender + saturated green/crimson
+stripes).
+
+**Bug report + GenAI insistence (user):** the legacy toggle only flipped
+parts of the map, and the user tried GenAI normal maps themselves with
+okay-ish results — insisted on that route.
+
+- Partial-toggle root cause: accent patches (dunes/gravel/crater/drift/
+  rubble) had no baked normals, so they showed the emboss in BOTH modes —
+  ~a third of the floor never visibly toggled. Fixed by giving every layer
+  a true normal map: accent maps PACKED two-per-RGBA (xy in RG / xy in BA —
+  the UDN blend only needs xy), keeping the terrain material at 15 of the
+  16 guaranteed fragment samplers. Accent emboss removed from the new
+  path; legacy mode keeps the full old emboss; toggle is now uniform.
+- **GenAI maps redeemed by per-texture hint prompts**: tools/
+  gen-normalmaps.mjs writes public/textures/<name>_n.png for all 9
+  textures, each prompt describing what the texture depicts and what
+  should protrude vs recess (strata ledges raised / bedding grooves
+  recessed, stones as bumps, crack lines as grooves...). With hints the
+  outputs have smooth continuous gradients and correct relief semantics —
+  night-and-day vs the generic prompt. Layouts are still redrawn (not
+  pixel-aligned with the albedo) but the painterly style absorbs it.
+- Loader preference (normalMaps.ts): `<name>_n.png` if present, else the
+  runtime Sobel bake — delete a file to fall back; `[normals]` console
+  line says which source each map used.
+- HUD (user request): `vox <raw> KB raw / <sparse> KB sparse` — dense
+  Float32 volume footprint vs what true block-sparse storage would hold
+  (mixed blocks × 4³ × 4B + one type byte per block). ~4.3 MB -> 2.3 MB at
+  current wash-heavy settings.
+- flat/smooth shading toggle now applies to decor materials too (they were
+  hard-coded flat; synced with needsUpdate in applyRenderOptions, so decor
+  rebuilt on regen inherits the current mode).
+
+**Bug report (user): normal maps feel inverted vs the light.** Two real
+sign bugs found:
+
+1. Sobel bake had GREEN inverted: with flipY uploads, +v = image top but
+   the row index grows downward, so n_v = +dy_rows — the bake stored -dy
+   and every ledge lit from below.
+2. **MirroredRepeatWrapping flips alternate tiles, which inverts the xy a
+   normal map ENCODES there** — relief polarity flipped every ~4.5 wu tile
+   (patchy "doesn't match the light" impression). The old screen-space
+   emboss was immune (it differentiates the sampled field), which is why
+   this never showed before. Fix: per-axis sign from tile parity
+   (triMirrorSign) applied to every normal-map sample, authored and baked
+   alike.
+
+After both fixes, ledge lips light on the sun side and shadow beneath,
+pebbles read raised, mesa cracks recessed — verified at two sites against
+the sun azimuth.
+
+Follow-up (user pinpointed): the GenAI-authored maps ALSO have their RED
+channel drawn with inverted handedness (the tool prompt's "slope toward
+right" is ambiguous). Un-detectable automatically (layouts not aligned
+with the albedo) — loader now applies a calibration flip to `_n.png`
+files (`AUTHORED_FLIP_R` / `_G` constants in normalMaps.ts).
+
+**Tri-planar transition controls (user request).** Three new Render
+tweaks: `blend crisp` (projection pow, 1.5-64 — near-step at max),
+`blend noise` (noise displacement of the top/side boundary) and
+`blend noise scale`. Implementation lesson: the noise must offset |N|.y
+BEFORE the sharpening pow — displacing the input moves the boundary line
+itself at any crispness, whereas scaling the weight after the pow shifts
+it by ~ln(f)/p (invisible at high crisp; the first attempt did exactly
+that and "didn't work"). Boundary displacement confined to the y weight:
+the x<->z side boundary uses the same texture, nothing to see. Note on
+visibility: this perturbs which DETAIL TEXTURE projects (cliff vs
+top/mesa), not the vertex-color banding — the pale-cap/strata color line
+is plateauWeight (mesher), a separate knob if noise is wanted there too.
+Legacy mode pins the classic pow-4 blend.
+
+**Height-priority layer transitions (user request).** The horizontal layer
+stacks (floor: sand/dunes/gravel/crater; mesa: slickrock/drift/rubble; and
+the plateau fringe itself) now blend by comparing per-layer HEIGHT +
+mask dominance (classic splat height-lerp): the winning layer keeps crisp
+pixels through the transition zone — stones stay solid over sand instead
+of ghost-fading. `layer crisp` slider (0 = classic linear fade, legacy
+pins it too).
+
+- Heights are GenAI-generated (tools/gen-heightmaps.mjs -> <name>_h.png,
+  per-texture hints: stones/plates white, dust/cracks dark), albedo
+  luminance as fallback for missing files.
+- Channel budget: sand/mesa heights ride in their normal maps' alpha,
+  rubble height in its pack's B, the four accent heights in one packed
+  RGBA (uTriAccH) — terrain lands at exactly 16 fragment samplers (the
+  GL-guaranteed minimum; nothing left, next texture needs an eviction).
+- The sharpened masks are written back into the shared triG* globals, so
+  albedo, normal-map selection, bump and roughness all switch together
+  (user: "obviously affects both albedo and normal maps" — yes).
+- Verified: gravel-over-sand transition at crisp 0 vs 1 — stones fully
+  solid deep into the blend zone vs ghosted crossfade.
+- **Seam fix (user report: hard lines between sandy textures):** between
+  two locally FEATURELESS layers the height pick degenerates — with no
+  height variance, "who is higher" flips along a single contour of the
+  mask: a hard seam. Two-part fix: (1) triHPick fades back to the plain
+  linear mask where |hOver-hUnder| is small (flat sand blends softly,
+  stones stay crisp — a self-tuning transition gap); (2) height maps are
+  mean-centered to 128 at load, since GenAI/luminance heights carry
+  arbitrary global levels and a level offset between layers displaces the
+  whole transition. Also: yes, lerping normal maps' tangent xy is a valid
+  blend (user wondered).
+
+**"Tiling layer problem" (user): visible patches, worse at high bump /
+layer crisp — suspected per-tile parameter desync.** Right instinct,
+different tiles: the patches are the anti-tiling VARIATION REGIONS. The
+albedo goes through triLayered (dual tap: base + rotated second copy,
+swapped over noise-shaped blobs to hide tiling), but normal and height
+maps were sampled with a single plain tap — inside every swap blob the
+color showed the rotated copy while relief/heights showed the base copy.
+Color-vs-bump disagreement over patch-shaped regions, scaling with bump
+strength and layer crisp. Fix: triNmXY/triNmZW dual-tap helpers — both
+taps mirror-corrected, the second tap's tangent xy rotated back through
+the inverse of the triUv2 rotation, blended by the SAME variation field
+(triVar) the albedo uses per texture; heights dual-tapped likewise.
+Also caught: the decor shader variant referenced uTriMesa (layers-only
+uniform) in the new path — undeclared identifier, invalid program (decor
+rendered from stale programs; "program not valid" spam). Gated per
+variant.
+
+**View rotation (user request).** Camera orbits the map in 90° steps —
+the terrain and lighting stay world-anchored (explicit: rotate the
+CAMERA, not the landscape). `IsoViewer.rotateStep(±1)`: yaw becomes
+YAW + steps·π/2; pan()'s screen→ground mapping and fitView's axis fit
+follow the current step (odd steps swap the map's W/D on screen).
+View-folder buttons ⟲/⟳ + Q/E keys (HUD hint updated). Side effects by
+design: shadows/glints change per quarter (sun is world-anchored — flat
+tops catch specular from some angles); known caveat: the mesa fog's
+screen-space apron assumes the default orientation (+x/+z toward screen
+bottom) and sits on the wrong side in rotated views (fog is off by
+default; fix when fog graduates from look-test). Three stacked causes: (1) the
+roughness clamp floor was 0.5, and this light rig (single sun, ortho iso,
+ACES) shows no specular above ~0.35 roughness — the slider's entire range
+was sub-threshold (also silently neutralized earlier global-roughness
+probes); (2) effect gain too small; (3) the layer sheen weights by
+UP-facing surfaces, but with a fixed sun/camera the half-vector sits ~37°
+off vertical — flat ground physically can't glint, only tilted facets can,
+and those were barely touched. Fixes: clamp floor 0.15, gain ×4, and the
+bright-texel term (sun-worn rock) strengthened and de-gated from
+up-facing so cliff facets carry the glints. Sheen 0 -> 1 now visibly adds
+sun-catching sparkle on bright facets and slickrock rims.
+
+**Residual floor seam (user: "still slightly visible; gone at bump 0, so
+it's a bump problem").** Correct read — the last seam was the
+triMirrorSign parity correction itself: a HARD sign flip at every
+MirroredRepeat tile boundary (~4.5 wu grid), while the sampled normal
+content underneath is linear/mip/aniso-FILTERED across that same
+boundary. In the hairline band where filtered content and flipped sign
+disagree, the tangent vector points the wrong way — a one-texel-ish
+lighting crease that scales with bump and ignores layer crisp (heights
+are scalar, no sign, hence immune). Fix: derivative-aware sign — the
+parity ramps through zero over a fwidth-scaled band around each mirror
+line, so bump fades out for a hair's width instead of flipping across
+filtered texels. Verified at bump 1.5 on open sand: clean.
+
+**Angle-corrected normal blending (user suggested UE's
+BlendAngleCorrectedNormals).** Adopted — it's Reoriented Normal Mapping,
+and the triplanar variant (Golus) is strictly better than our UDN
+xy-add: per projection plane, the MESH normal (swizzled into that
+plane's tangent frame) is the RNM base and the sampled map is reoriented
+onto it, then the three results are swizzled back and weight-blended.
+Wins over UDN: detail keeps its shape at grazing angles instead of
+washing out (UDN's added xy is crushed by normalize when the base is
+steep), and RNM is an exact identity at bump 0 — the flat-shading facets
+pass through untouched by construction, where UDN only preserved them
+approximately. Bump strength scales the sampled tangent xy BEFORE
+reorienting; the legacy gate rides in the same scale (strength 0 ⇒
+identity ⇒ legacy emboss applies to the raw mesh normal as before).
+`triRnm()` guards its division by construction (base.z arrives as
+abs(axis)+1 ≥ 1). Decor shares the path via the same shader factory.
+Verified: floor at bump 1.5 seam-free and unchanged in character; mesa
+tops/strata read crisper on slopes.
+
+**Mirror tiling off by default (user: "might be problematic — at least
+provide a toggle").** Fair — MirroredRepeat caused two real bugs (per-
+tile normal handedness inversion, then the hairline sign-step seams) for
+one benefit (hiding hard tile edges), and the anti-tiling dual tap
+already masks those edges. Now: plain RepeatWrapping by default,
+`mirror tiling` checkbox in Render tweaks. All tiled textures (albedos +
+async-baked normal/height packs) register with terrainMaterial's
+`registerTiledTexture`, and `setMirrorTiling` flips wrap + re-uploads at
+runtime; the shader-side handedness correction is gated by the matching
+uTriMirror uniform (mix inside triMirrorSign — no recompile, and the two
+MUST agree or relief polarity alternates per tile). A/B verified at bump
+1.2: repeat mode shows no visible tile edges on floors or mesa tops.
+
+User: the existing terrace tweaks are "very minimalistic" — wants a real
+stepped/benched canyon-wall look. Two coordinated changes:
+
+- **Heightfield terracing reworked** (fields.ts): riser sharpness is now a
+  parameter (`terraceSharp`: riser half-width 0.35 -> 0.06, treads go
+  dead-flat at 1); band phase undulated by low-freq fBm so strata lines
+  wander instead of tracing ruler-straight contours; and the flank window
+  widened (stepWeight vs the old parabolic bandWeight, which faded the
+  upper/lower steps into mush — a main cause of the old minimal look).
+- **3D strata benches** (volume.ts): per elevation band, the upper half
+  (resistant caprock) protrudes and the lower half (soft layer) recesses by
+  `ledgeAmp` — the face gets channeled into benches with an overhang lip
+  under every cap even where the slope is too steep for heightfield
+  terracing to carve wide treads (tread width = step/slope ≈ 0.3-0.6 wu
+  here, too narrow on its own — the first lip-only attempt proved that).
+  Band phase uses the SAME jitter formula as fields.ts so the 3D benches
+  ride the heightfield strata. Influence band widened by ledgeAmp so the
+  block classification stays conservative.
+- New "Walls & floor" sliders: `terrace sharp` (default 0.65) and
+  `strata ledges` (default 0.18 — subtle); evaluated in-browser at
+  sharp 0.9 / ledges 0.45 / amt 0.9: walls read as layered buttes with
+  crisp under-cap shadows at gameplay zoom, spurs pick up ringed steps.
+  Those cranked values are in the session localStorage for user tuning.
+
+## 2026-07-06 — v0.14 (branch `research/voxel3d`): block-sparse density volume
+
+Kickoff of the true-3D terrain research track (goal: arches + overhangs —
+tunnels were considered and dropped as impractical for the map). Step 1 is
+pure infrastructure: make the density volume block-sparse so a genuinely 3D
+field (carve ops, more 3D noise) stays inside the regen budget, with **zero
+output change**.
+
+- `src/gen/volume.ts`: the density fill moved out of the mesher into
+  `buildDensityVolume()`. The volume is split into 4³ blocks classified
+  AIR / SOLID / MIXED against per-column surface bands
+  `[groundH - influence, groundH + influence]` over a 1-voxel-padded
+  footprint; only MIXED blocks are evaluated per voxel, homogeneous blocks
+  are constant-filled (sign is all the mesher reads there). Storage stays
+  one dense Float32Array — the sparsity is in evaluation/traversal, which
+  is where the time goes (a few MB dense is irrelevant at this scale).
+- `surfacenets.ts`: traversal keeps the exact global z→y→x cell order but
+  skips whole non-MIXED block runs, so the emitted vertex/index streams
+  are **byte-identical** to the brute-force path — that's the correctness
+  contract, not "looks the same".
+- `tools/verify-volume.ts` (npx tsx): A/B check classified vs forceAllMixed
+  across 5 seeds × 3 voxel sizes — asserts byte-identical geometry and
+  sign-identical density at every voxel (AO reads signs only).
+- **Bug found by the verifier**: the diorama-skirt rule (volume boundary
+  forced to air) was only applied to blocks *containing* boundary voxels,
+  but cells in a block's last row read corners one voxel further — with a
+  1-voxel-thin final block the skirt crossings sit in the *inner* neighbor,
+  which classified SOLID and got skipped (dropped ~5.6k verts at
+  voxel 0.15). BLOCK=8 masked it by luck of nz%8; BLOCK=4 exposed it.
+  Fix: boundary-force any would-be-solid block whose padded range reaches
+  the forced-air shell.
+- BLOCK=4 beats 8: tighter hull around cliff faces (27% vs 36% mixed at
+  voxel 0.15) and faster nets. Numbers (seed 42): voxel 0.3 — mixed 41%,
+  nets 28→24 ms; voxel 0.15 — mixed 27%, fill 182→163 ms, nets 181→105 ms.
+  Modest at 0.3 (noise eval was already band-gated); the win grows with
+  resolution, and the block grid is the hook for per-block carve-op lists
+  in the next step.
+- Mesher now logs a `[mesher]` console.debug line with block stats + stage
+  timings. Verified in-browser: default map renders identically, gen 466 ms
+  total (fill 39, nets 66, normals+ao 107, color 33).
+
+**Same day — carve-op stage + natural arches:**
+
+- `src/gen/carves.ts`: `CarveOp` = inside-positive pseudo-SDF + conservative
+  world bounds; `add` unions rock in (`d = max(d, sdf)`), `cut` subtracts
+  (`d = min(d, -sdf)`, unused yet — reserved for fin windows). Ops plug into
+  `buildDensityVolume` after the column fill: blocks whose padded range
+  intersects an op's bounds are forced MIXED and get a per-block op list —
+  assignment depends only on the bounds, so the byte-identity contract
+  (verify-volume, now with `archCount 4`) covers ops too.
+- **Arch = natural bridge over a corridor throat.** Placement is fully
+  deterministic from the fields, no RNG: from each flat hex, probe 24 radial
+  directions in the 2D SDF for the nearest wall and a facing wall within
+  ±30° of opposite; span + both-rims-high-enough → candidate; greedy pick by
+  score (rim height / span) with ≥6 wu separation. The op solid is a
+  wall-to-wall beam: flat deck (plateau remnant — picks up the cap color +
+  mesa texture layers automatically), parabolic underside thickest at the
+  abutments, small fBm perturbation on edges/underside so the CSG doesn't
+  read machine-cut.
+- Placement iteration (caught by running the verifier across seeds, not by
+  eye): v1 sampled rim height at fixed 1.1 wu behind the wall face — walls
+  ease up over `wallThickness`, so that's a low shoulder and most seeds got
+  ZERO arches. v2 marched inward to the first tall-enough rock — still
+  starved seeds whose mesas sink (per-region altitude offsets; seed 12345's
+  best reachable rock is 4.26 wu vs the 4.9 bar). v3: anchor at the HIGHEST
+  rock within `wallThickness+1.5` of the face, sink the deck 10% below the
+  lower rim, and let deck thickness give way (min 0.35) so only the
+  clearance itself is a hard requirement. All test seeds now place 1–4
+  arches (some maps genuinely offer few sites).
+- Hexes under a deck keep their floor untouched (ops live only in the 3D
+  volume; 2D fields and the draped overlays never see them), so passability
+  and the grid are unchanged — the bridge just roofs an existing corridor.
+  Clearance under the deck is guaranteed by construction (default 1.9 wu).
+- "3D carve" GUI folder: arches / arch width / deck thickness / clearance /
+  max span. Verified in-browser at seed 16859: 2/2 arches, the central one
+  reads as a pale-capped rock span rooted into two mesas with the corridor
+  grid running beneath; `[carves]` debug line logs placements + world
+  coords.
+
+**Feedback: "those arches won't cut it — just slabs."** User wants an
+actual cut through existing walls or a real arched formation with a hole
+underneath. Redesign (same day):
+
+- **Arch = plug + vault** instead of a floating beam. The `add` op is now a
+  full-height rock mass filling the throat wall-to-wall (rooted below the
+  floor, crown blending between the two abutment heights with an eroded
+  mid-span saddle); a `cut` op pierces an arched slot through it along the
+  corridor — vertical sides to the spring line, semicircular crown, hugging
+  the wall faces so no legs land on passable cells and the passage keeps
+  its width. Op array is ordered adds-then-cuts so openings always win.
+  Result reads as the canyon walls meeting overhead with a genuine dark
+  vault beneath (verified in-browser; the plug merges invisibly with the
+  strata).
+- **Fin windows**: cut-only holes punched through thin tall fins (wall
+  columns with |s2| <= 1.15 and open air on BOTH sides within reach), well
+  above the floor — no passability impact. Scarce by nature on this
+  generator's thick walls (0-1 per map typically); scan is deterministic.
+- **Op-bounds invariant learned the hard way**: the vault slot was bounded
+  only by its AABB while the sdf leaked along the passage axis — ops
+  evaluate wherever their block list reaches, so phantom slot surfaces
+  appeared at list boundaries and the verifier caught missing vertices
+  (sign-scan clean, traversal divergent). CarveOp now documents the
+  contract: sdf <= 0 everywhere outside the declared bounds; the slot got
+  an explicit along-axis bound.
+- `IsoViewer.lookAtWorld(x, z, zoom)` + `window.__cw` dev hook: scripted
+  Playwright verification can now frame any world position instead of
+  blind wheel-zooming.
+
+**Same day — "washed foundation" basal erosion (user request):**
+
+- In the base density fill (volume.ts, not an op): an erosion notch cut
+  into wall faces — deepest at floor level, tapering to nothing over
+  `washHeight` — driven by the per-column 2D SDF (depth into the wall).
+  Gated by a map-wide LARGE-SCALE fBm mask (`washScale`, default 0.05 ->
+  ~20 wu patches; `washCoverage` sets the threshold) times a medium-scale
+  detail that scallops the grotto mouths, per explicit user direction that
+  the effect must be patchy, not map-wide. Never cuts below floor+0.12,
+  never outside walls (bounded by s2), so the flat playable floor and
+  passability are untouched.
+- Exactness: washed columns extend their classification band down to the
+  floor; the notch is strictly contained in gated columns, and the existing
+  ±1-column footprint padding covers edge reach into neighbors — verifier
+  stays byte-identical with wash at coverage 0.7 across all seeds/voxels.
+- Four sliders in "3D carve": base wash (depth), wash height, wash
+  coverage, wash scale. Look verified in-browser: washed stretches show
+  bright overhanging rims over deep-shadowed basal hollows; unwashed
+  stretches keep the crisp talus line. Gen ~500 ms at defaults.
+
+**Bug report: "bright spots at ground level next to walls in shadowed
+areas" with wash tweaked up.** Investigation (A/B with wash on/off,
+decor on/off, texture on/off at fixed cameras via the new lookAtWorld
+hook) found three stacked causes; all fixed:
+
+1. **Grazing notch ceiling** (geometry): the linear depth taper met the
+   wall face at a razor angle, smearing a band of sliver triangles.
+   Fixed: sqrt profile — vertical tangent at the top, the ceiling meets
+   the face in a crisp lip — plus a 0.04 erosion to trim sub-voxel
+   hairlines.
+2. **Mesa texture on grotto ceilings** (shader): the triplanar top
+   projection weights by |normal.y|⁴ and the plateau layer blended by
+   world-y only, so DOWN-facing notch ceilings above uTriPlateauY-1.2
+   received the pale slickrock texture. Fixed: plateau blend now
+   multiplied by a signed up-facing gate (smoothstep 0.15..0.5 of
+   normal.y). Note: pale patches on up-facing wall shoulders crossing the
+   y threshold exist WITHOUT wash and are part of the established look —
+   left alone.
+3. **Pierced wall bases** (the actual "bright spots in shadow"): at high
+   amp/coverage, notches washed from opposite faces of a thin wall met at
+   the base — real sunlight streamed through a gap under an intact-looking
+   lip and dappled the shadowed floor (the reporter's instinct said shadow
+   mapping; the shadow map was fine — the wall genuinely had holes).
+   Fixed: per-column pierce guard — march inward along -grad(s2); the
+   most-negative s2 on the ray IS the local half-thickness (the ray
+   crosses the medial and exits the far side, so neighboring walls can't
+   contaminate the estimate); clamp notch depth to keep a >=0.45 wu solid
+   core. Verified at worst-case settings (amp 1.6, coverage 1.0, sun 32°):
+   shadow bands read uniformly dark; verifier stays byte-identical.
+
+**Round 2 — user still saw "shine through" on wall undersides and was
+convinced it's shadow leaking (resolution?).** Settled empirically with a
+live A/B matrix at the exact artifact (window.__cw camera hook + Playwright
+page.evaluate): normalBias 0.2→0.02 — no change; bias -0.0008→-0.004 — no
+change; shadowSide DoubleSide — no change; 8K shadow map — no change; **sun
+intensity 0 — patches STILL THERE.** With no direct light there is no
+shadowing, so this is definitively pale ALBEDO under ambient, which the eye
+reads as leaked light inside a shadowed wall base. The shadow stack is
+healthy; don't re-litigate it (the experiment script pattern is in this
+entry's commit).
+
+Root cause: the plateau-cap color rule was `up-facing AND y > wallHeight *
+0.45 (≈2.34)` — ANY rounded knob above 2.34 turned bleached-cream, and the
+shader's mesa-texture layer used the same bare y smoothstep (weighted by
+abs(normal.y)^4, so even DOWN-facing grotto ceilings took it). Pure
+heightfield terrain never exposed this badly; the wash mass-produces
+rounded lips and knobs at wall bases right next to dark hollows.
+
+Fixes (all albedo-side):
+- `plateauWeight()` in mesher.ts: cap requires (near own column top) AND
+  (deep inside a wall region — smoothstep on -s2 — OR genuinely tall) AND
+  a minimum height. Sunken mesa tops keep their cap (interior test); arch
+  decks keep it (they rise above groundH, hEff = max(h, y) handles them);
+  basal knobs and wash lips are demoted to the floor branch.
+- `facies` attribute extended to vec3; `.z` = baked plateau weight; the
+  shader's triPlateau now uses the baked channel (plus the signed
+  up-facing gate from round 1) instead of the y smoothstep.
+- Floor-branch contact shading strengthened for up-facing surfaces ON the
+  wall footprint (s2 < 0): extra lerp toward CREVICE, so demoted benches
+  read as dark rock shelf, not bright sand.
+- Also kept from round 1 (real but secondary): sqrt notch profile (no
+  grazing sliver band), rock-overhead crevice tint via density probes
+  (grotto interiors darken), wash pierce guard.
+Verified at the two reported artifact walls: pale patches gone / demoted
+to warm rock; mesa tops, terraces and arch decks keep the established
+pale-cap look.
+
+**Round 3 — user still reports leak-like patches, requested a taller wash
+with the notch floor pinned to ground level.** Done + shadow hardening:
+
+- Notch bottom now sits exactly at floorBase (was floor+0.12 — the raised
+  step at mouths is gone); washHeight slider extended to 4.5 — tall washes
+  read as proper grottoes/galleries.
+- `terrainMaterial.shadowSide = THREE.DoubleSide`: with back-face-only
+  shadow depth (three.js default), thin rock — wash lips, remnant cores —
+  is a classic light-leak vector; both-faces depth makes even paper-thin
+  occluders reliable. No acne observed (normalBias 0.2 absorbs it).
+- Pierce-guard min core 0.45 -> 0.8 wu (thicker occluders), and the guard's
+  ray march reach extended to depth+0.9 — the old reach (depth+0.5) paired
+  with the old core; reusing it would have silently shaved 0.3 off EVERY
+  wash on thick walls (march can't see deeper than it walks).
+- Hunted for genuine shadow leaks with hemisphere light disabled (pure sun:
+  any leak glows against black): none found across six shadow-side walls at
+  amp 1.5 / height 3.5 / coverage 1.0. If a leak sighting persists, get the
+  exact spot + params and re-run the sun-off / hemi-off discriminator pair
+  there before touching the shadow stack.
+
 ## 2026-07-05 — v0.13: decorative mesa fog of war (look test)
 
 Goal: test a decorative "fog of war" veiling the large impassable mesa

@@ -156,6 +156,85 @@
 - [x] Drifting cloud shadows on direct sunlight (animated world-space
       value noise, Render tweaks slider)
 
+## Done (v0.14 — block-sparse volume, branch `research/voxel3d`)
+
+- [x] `gen/volume.ts`: density fill extracted from mesher into a 4³
+      block-classified volume (AIR/SOLID/MIXED from per-column surface
+      bands, padded 1 voxel); only MIXED blocks evaluated per voxel
+- [x] Surface nets skips non-MIXED block runs in the same global cell
+      order — output byte-identical to brute force
+- [x] `tools/verify-volume.ts`: A/B verifier (geometry bytes + density
+      signs), 5 seeds × 3 voxel sizes; caught a diorama-skirt
+      classification bug at thin final blocks
+- [x] `[mesher]` console.debug: block stats + per-stage timings
+- [x] Carve-op stage: `gen/carves.ts` CarveOp (add/cut pseudo-SDF +
+      bounds), per-block op lists in the volume, byte-identity contract
+      extended to ops
+- [x] Natural arches over corridor throats: deterministic radial-probe
+      placement, highest-rock anchoring — REDESIGNED after user feedback
+      ("slabs"): plug (wall-to-wall rock mass) + arched vault cut, legs in
+      the walls, real hole underneath; adds-then-cuts op ordering
+- [x] Fin windows: cut holes through thin fins (open air both sides),
+      above the floor, no passability impact
+- [x] Basal wash ("washed foundation"): erosion notch at wall bases ->
+      overhangs/grottoes, gated by map-wide large-scale noise mask +
+      detail scallops; flat floor untouched; 4 sliders
+- [x] "3D carve" GUI folder (arches, depth, cap, clearance, span,
+      windows, wash x4)
+- [x] `IsoViewer.lookAtWorld` + `window.__cw` dev hook for scripted
+      visual verification
+
+## Done (v0.15 — stepped walls)
+
+- [x] Terracing rework: riser sharpness param, undulating band phase,
+      wider flank window (old bandWeight mushed top/bottom steps)
+- [x] 3D strata benches: caprock half-band protrudes / soft half recesses
+      (`ledgeAmp`), aligned with heightfield strata; overhang lip under
+      every cap
+- [x] Sliders: terrace sharp, strata ledges
+
+## Done (v0.16 — rendering/textures: real bump + albedo blend)
+
+- [x] Runtime normal-map baking from detail textures (normalMaps.ts)
+- [x] True tri-planar normal mapping for side/floor/mesa (UDN, world
+      space, perturbs the flat-shaded normal)
+- [x] Decor on the same normal-map path (rock.jpg baked) — no more
+      emboss desync
+- [x] Accent-patch emboss restored, mask-weighted (derivatives kept in
+      uniform control flow — branching caused speckles)
+- [x] `tex albedo` slider: vertex-palette tint <-> texture own color
+      (palette luminance preserved)
+- [x] `legacy shading` A/B toggle (runtime uniform, no recompile) —
+      fixed to flip the WHOLE map (accents had no normals and stayed
+      emboss in both modes)
+- [x] GenAI normal maps: generic prompt failed (redrawn + quantized),
+      per-texture hint prompts WORK — tools/gen-normalmaps.mjs writes
+      <name>_n.png for all 9; loader prefers them, Sobel bake fallback
+- [x] Accent normal maps packed 2-per-RGBA (sampler budget: 15/16)
+- [x] HUD: vox raw/sparse KB
+
+## Next (rendering/textures)
+
+- [ ] Regenerate/expand the texture set with richer color + higher res
+      (nano-banana2 key) now that own-color blending makes it matter
+- [ ] Accent layers (dunes/gravel/drift/rubble/crater) currently have no
+      bump under the normal-map path — bake + pack their normals if the
+      loss shows (sampler budget: pack 2 maps per RGBA texture)
+- [ ] Roughness could key off the normal maps' cavity instead of bare
+      luminance
+
+## Next (research/voxel3d — arches & overhangs, NO tunnels)
+
+- [ ] Look iteration with user: arch proportions/count, wash
+      depth/coverage defaults, window scarcity (thick walls offer few
+      fins — consider fin-friendlier wall gen if windows matter)
+- [ ] Cornice at the rim (lean-out near the top) — the wash covers the
+      base; a rim counterpart would complete the profile
+- [ ] Headroom-aware passability (still guaranteed by construction;
+      needed if cut ops ever open odd spaces over passable cells)
+- [ ] Wash vs decor: scree fans / boulders can float inside washed
+      hollows (decor samples the 2D fields only) — check & fix if seen
+
 ## Next
 
 - [ ] Decor edit brushes: place/erase boulders & pillars by hand; persist
@@ -178,3 +257,7 @@
 - Wind-blown dust particles, heat shimmer post FX
 - Minimap render-to-texture (like concept's command console)
 - Biome variants: dark basalt canyon, white sandstone, polar ice
+
+## Done (v0.16 addenda)
+
+- [x] flat/smooth shading toggle now applies to decor meshes too

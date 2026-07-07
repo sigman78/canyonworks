@@ -54,13 +54,43 @@ column fields       floor height (fBm + crater dents w/ rims + talus rise at
                     slots after the flatten pass (clipped on passable
                     hexes). Output: groundH / wallMask / craterD / crackD.
       |
+carve ops           3D CSG on the density volume (arches & overhangs track):
+ (carves.ts)        CarveOp = inside-positive pseudo-SDF + conservative
+                    bounds (INVARIANT: sdf <= 0 outside them); 'add' unions
+                    rock, 'cut' subtracts; array ordered adds-then-cuts.
+                    Arch = plug + vault over a corridor throat: a
+                    wall-to-wall rock mass (radial-probe placement from
+                    flat hexes, highest-rock anchoring, saddle crown) with
+                    an arched slot cut through along the corridor — walls
+                    meet overhead, hole underneath, no legs on passable
+                    cells. Windows = holes through thin fins (air on both
+                    sides), above the floor. Floor/2D fields untouched ->
+                    passability + overlays unaffected.
+      |
 3D density          density = groundH - y, plus 3D fBm roughness on the cliff
- (mesher.ts)        band only (gives mild overhangs). Volume boundary forced
-                    to air -> closed "diorama block" skirt.
+ (volume.ts)        band only (gives mild overhangs), plus stepped strata
+                    benches (caprock half-band protrudes, soft half
+                    recesses, phase-aligned with the heightfield
+                    terracing), plus the basal wash:
+                    an erosion notch at wall bases (deepest at the floor,
+                    fading over washHeight, depth from the 2D SDF) gated by
+                    a map-wide large-scale noise mask + detail scallops ->
+                    patchy overhangs and grottoes, flat floor untouched.
+                    Then carve ops applied per voxel via per-block op
+                    lists. Volume boundary forced to air -> closed
+                    "diorama block" skirt. Block-sparse:
+                    4³ blocks classified AIR/SOLID/MIXED from per-column
+                    surface bands (1-voxel-padded footprint); only MIXED
+                    blocks are evaluated per voxel, homogeneous blocks are
+                    constant-filled (only their sign is ever read). Geometry
+                    is byte-identical to a brute-force dense fill —
+                    regression-checked by tools/verify-volume.ts.
       |
 surface nets        one vertex per sign-crossing cell, quads across sign-
- (surfacenets.ts)   changing edges. Vertex colors: slope+height dependent
-                    strata bands / floor sand / mesa caps / contact shading.
+ (surfacenets.ts)   changing edges; traversal skips non-MIXED block runs in
+                    the same global cell order. Vertex colors: slope+height
+                    dependent strata bands / floor sand / mesa caps /
+                    contact shading.
       |
 decor modifiers     non-SDF instanced features (decor.ts):
                     - boulders: perturbed icosahedra, wall-base biased,

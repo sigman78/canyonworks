@@ -214,9 +214,17 @@ export function buildFields(
 
         h = lerp(floorH + params.talusAmp, wallH, easeWall(w));
 
-        // terraced strata on the flank
+        // terraced strata on the flank: flat treads, sharpness-controlled
+        // risers, band phase undulated by low-freq noise so strata lines
+        // wander instead of being ruler-straight contours
         if (params.terraceAmt > 0 && w > 0.02 && w < 0.98) {
-          h = lerp(h, terrace(h, params.terraceStep), params.terraceAmt * bandWeight(w));
+          const riserHW = 0.35 - 0.29 * params.terraceSharp;
+          const tj = fbm2(n2, x * 0.06 + 3.3, z * 0.06 - 6.1, 2) * params.terraceStep * 0.6;
+          h = lerp(
+            h,
+            terrace(h + tj, params.terraceStep, riserHW) - tj,
+            params.terraceAmt * stepWeight(w),
+          );
         }
         // erosion gullies down the flank, continuing as drainage channels
         // across the top (same noise field -> channels notch the rim where
@@ -392,19 +400,32 @@ function boxBlur(a: Float32Array, w: number, h: number, r: number): void {
   }
 }
 
-/** smooth terracing: quantize with softened risers */
-function terrace(h: number, step: number): number {
+/**
+ * Terracing: quantize into flat treads with risers of half-width
+ * `riserHW` (0.5 = pure smooth ramp, 0.06 = near-vertical staircase).
+ */
+function terrace(h: number, step: number, riserHW = 0.25): number {
   if (step <= 0.01) return h;
   const k = h / step;
   const f = Math.floor(k);
   const frac = k - f;
-  const s = smoothstep(0.25, 0.75, frac);
+  const s = smoothstep(0.5 - riserHW, 0.5 + riserHW, frac);
   return (f + s) * step;
 }
 
 /** strongest terracing mid-flank, fades at floor contact and rim */
 function bandWeight(w: number): number {
   return clamp01(4 * w * (1 - w));
+}
+
+/**
+ * Wider flank window for the stepped look: full terracing across most of
+ * the rise, fading only right at the talus contact and the rim shoulder
+ * (the old parabolic bandWeight mushed the upper and lower steps away —
+ * a big reason the terraces read "minimalistic").
+ */
+function stepWeight(w: number): number {
+  return smoothstep(0.02, 0.14, w) * (1 - smoothstep(0.86, 1, w));
 }
 
 /** wall rises steeply from the base then eases into the top */

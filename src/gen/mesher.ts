@@ -2,73 +2,64 @@ import * as THREE from 'three';
 import { clamp01, fbm2, fbm3, ridged2, smoothstep, type NoiseKit } from '../core/noise';
 import type { Fields } from './fields';
 import type { GenParams } from './params';
+import type { CarveOp } from './carves';
 import { surfaceNets } from './surfacenets';
+import { BLOCK, buildDensityVolume, type DensityVolume } from './volume';
 
 export interface TerrainResult {
   geometry: THREE.BufferGeometry;
   vertexCount: number;
   triangleCount: number;
+  /** dense volume footprint vs what true block-sparse storage would hold */
+  voxRawKb: number;
+  voxSparseKb: number;
 }
 
 /**
  * Sample the 3D density (column ground height + 3D roughness on the wall
- * band, which also yields mild overhangs) and mesh it with surface nets.
+ * band, which also yields mild overhangs) into a block-sparse volume and
+ * mesh it with surface nets.
  */
 export function buildTerrainGeometry(
   fields: Fields,
   params: GenParams,
   noise: NoiseKit,
+  ops: readonly CarveOp[] = [],
 ): TerrainResult {
-  const { nx, nz, voxel, originX, originZ, groundH, wallMask } = fields;
-  const ny = Math.ceil((fields.maxH + 1.0) / voxel) + 1;
-  const data = new Float32Array(nx * ny * nz);
+  const t0 = performance.now();
+  const vol = buildDensityVolume(fields, params, noise, ops);
+  const { data, nx, ny, nz, voxel, originX, originZ } = vol;
+  const t1 = performance.now();
 
-  const amp = params.wallNoiseAmp;
-  const nf = params.wallNoiseFreq;
-  const influence = amp * 1.6 + voxel;
-  const { n3 } = noise;
+  const nets = surfaceNets(data, nx, ny, nz, voxel, originX, 0, originZ, vol);
+  const t2 = performance.now();
 
-  for (let iz = 0; iz < nz; iz++) {
-    const z = originZ + iz * voxel;
-    const edgeZ = iz === 0 || iz === nz - 1;
-    for (let ix = 0; ix < nx; ix++) {
-      const col = iz * nx + ix;
-      const x = originX + ix * voxel;
-      const h = groundH[col];
-      const w = wallMask[col];
-      const edge = edgeZ || ix === 0 || ix === nx - 1;
-      // roughness strongest on the cliff flank, none on open floor
-      const rough = amp * smoothstep(0.03, 0.25, w) * (1 - 0.6 * smoothstep(0.85, 1, w));
-
-      for (let iy = 0; iy < ny; iy++) {
-        const idx = ix + iy * nx + iz * nx * ny;
-        if (edge || iy === ny - 1) {
-          data[idx] = -1; // force air at volume boundary -> closed diorama skirt
-          continue;
-        }
-        const y = iy * voxel;
-        let d = h - y;
-        if (rough > 0.001 && Math.abs(d) < influence) {
-          d += fbm3(n3, x * nf, y * nf * 0.7, z * nf, 3) * rough;
-        }
-        data[idx] = d;
-      }
-    }
-  }
-
-  const nets = surfaceNets(data, nx, ny, nz, voxel, originX, 0, originZ);
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(nets.positions, 3));
   geometry.setIndex(new THREE.BufferAttribute(nets.indices, 1));
   geometry.computeVertexNormals();
 
   bakeAo(geometry, data, nx, ny, nz, voxel, originX, originZ);
-  colorize(geometry, fields, params, noise);
+  const t3 = performance.now();
+  colorize(geometry, fields, params, noise, vol);
+  const t4 = performance.now();
+
+  const nBlocks = vol.nbx * vol.nby * vol.nbz;
+  console.debug(
+    `[mesher] ${nx}x${ny}x${nz} vox, blocks ${nBlocks} ` +
+      `(mixed ${vol.mixedCount} = ${Math.round((vol.mixedCount / nBlocks) * 100)}%, ` +
+      `solid ${vol.solidCount}) | fill ${(t1 - t0).toFixed(1)}ms, ` +
+      `nets ${(t2 - t1).toFixed(1)}ms, normals+ao ${(t3 - t2).toFixed(1)}ms, ` +
+      `color ${(t4 - t3).toFixed(1)}ms`,
+  );
 
   return {
     geometry,
     vertexCount: nets.positions.length / 3,
     triangleCount: nets.indices.length / 3,
+    voxRawKb: Math.round((nx * ny * nz * 4) / 1024),
+    // mixed blocks store voxels; homogeneous ones just their type byte
+    voxSparseKb: Math.round((vol.mixedCount * BLOCK * BLOCK * BLOCK * 4 + nBlocks) / 1024),
   };
 }
 
@@ -174,15 +165,31 @@ function colorize(
   fields: Fields,
   params: GenParams,
   noise: NoiseKit,
+  vol: DensityVolume,
 ): void {
   const pos = geometry.getAttribute('position') as THREE.BufferAttribute;
   const nrm = geometry.getAttribute('normal') as THREE.BufferAttribute;
   const count = pos.count;
   const colors = new Float32Array(count * 3);
+
+  // rock-overhead probe (grotto/notch interiors): vertical samples into the
+  // density volume, like the AO bake but sky-only
+  const inv = 1 / vol.voxel;
+  const solidAbove = (x: number, y: number, z: number): boolean => {
+    const ix = Math.round((x - vol.originX) * inv);
+    if (ix < 0 || ix >= vol.nx) return false;
+    const iy = Math.round(y * inv);
+    if (iy < 0 || iy >= vol.ny) return false;
+    const iz = Math.round((z - vol.originZ) * inv);
+    if (iz < 0 || iz >= vol.nz) return false;
+    return vol.data[ix + iy * vol.nx + iz * vol.nx * vol.ny] > 0;
+  };
+  const CAVE_STEPS = [0.55, 1.0, 1.6, 2.4];
   // morphology channels for the shader: x = dome hollow (same field as the
   // mesa-top swell in fields.ts) -> drift sand pools there; y = crater
-  // interior weight (1 in the bowl, fading out at the rim crest)
-  const facies = new Float32Array(count * 2);
+  // interior weight (1 in the bowl, fading out at the rim crest); z =
+  // plateau-cap weight (gates the pale mesa texture layer)
+  const facies = new Float32Array(count * 3);
   const { n2 } = noise;
   const tmp = new THREE.Color();
   const strataStep = Math.max(0.4, params.terraceStep);
@@ -197,8 +204,10 @@ function colorize(
     const dither = fbm3(noise.n3, x * 0.35, y * 0.5, z * 0.35, 2);
     const dome = fbm2(n2, x * 0.045 + 11.0, z * 0.045 - 23.0, 3);
     const craterDist = sampleCraterD(fields, x, z);
-    facies[i * 2] = clamp01((-dome - 0.05) / 0.55);
-    facies[i * 2 + 1] = 1 - smoothstep(0.8, 1.02, craterDist);
+    const capW = plateauWeight(fields, params, x, y, z);
+    facies[i * 3] = clamp01((-dome - 0.05) / 0.55);
+    facies[i * 3 + 1] = 1 - smoothstep(0.8, 1.02, craterDist);
+    facies[i * 3 + 2] = capW;
 
     if (nY < 0.65) {
       // cliff face: quantized strata bands. The index CLAMPS at the top of
@@ -217,9 +226,9 @@ function colorize(
       // slight vertical gradient: darker at base
       const baseDark = clamp01(1 - y / (params.wallHeight + params.wallVar));
       tmp.multiplyScalar(0.95 - baseDark * 0.15 + dither * 0.04);
-    } else if (y > params.wallHeight * 0.45) {
-      // plateau top (threshold is low: per-mesa offsets can sink a top by
-      // nearly two quantization steps)
+    } else if (capW > 0.4) {
+      // plateau top — see plateauWeight() for what qualifies (and what the
+      // old bare y-threshold got wrong)
       tmp.copy(CAP).lerp(STRATA[4], clamp01(0.3 + dither * 0.4));
       // sand pockets collect in the dome hollows (same field as the swell)
       if (dome < -0.12) tmp.lerp(FLOOR_A, smoothstep(0.12, 0.5, -dome) * 0.6);
@@ -246,10 +255,29 @@ function colorize(
         if (ring > 1.02) tmp.lerp(EJECTA, smoothstep(1.5, 1.05, ring) * 0.3);
       }
 
-      // contact shading at wall bases
+      // contact shading at wall bases; up-facing surfaces ON the wall
+      // footprint itself (s2 < 0 — wash lips, basal knobs demoted from the
+      // cap branch) darken further toward rock shelf so bright sand never
+      // pops inside a shadowed wall base
       const contact = clamp01(1 - s2 / 1.6);
-      if (contact > 0) tmp.lerp(CREVICE, contact * 0.28);
+      if (contact > 0) tmp.lerp(CREVICE, contact * 0.28 + smoothstep(0, 0.8, -s2) * 0.25);
       tmp.multiplyScalar(1 + dither * 0.05);
+    }
+
+    // interior surfaces under overhanging rock — wash grottoes, notch
+    // floors, vault backs — have no sky above; pull them hard toward the
+    // crevice shade. Without this, up-facing surfaces inside a hollow get
+    // classified as bright sand floor, which pops inside a shadowed wall
+    // base and reads like light leaking through the rock.
+    {
+      const px = x + nrm.getX(i) * vol.voxel * 0.8;
+      const py = y + nY * vol.voxel * 0.8;
+      const pz = z + nrm.getZ(i) * vol.voxel * 0.8;
+      let hits = 0;
+      for (const s of CAVE_STEPS) {
+        if (solidAbove(px, py + s, pz)) hits++;
+      }
+      if (hits > 0) tmp.lerp(CREVICE, (hits / CAVE_STEPS.length) * 0.62);
     }
 
     // fissure shading (applies on floor AND across ridge tops): slot
@@ -270,7 +298,33 @@ function colorize(
   }
 
   geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-  geometry.setAttribute('facies', new THREE.BufferAttribute(facies, 2));
+  geometry.setAttribute('facies', new THREE.BufferAttribute(facies, 3));
+}
+
+/**
+ * How much an up-facing surface reads as pale plateau cap, 0..1.
+ * A genuine cap must be (a) at/near its own column's top — 3D-carved
+ * ledges, wash lips and grotto floors sit far below their column's
+ * groundH — and (b) either deep inside a wall region (a true mesa top,
+ * however sunken by the per-region offsets) or genuinely tall (full-height
+ * rims). Low rounded knobs at wall BASES fail both: previously they crossed
+ * a bare y threshold and glowed bleached-cream inside shadowed bases,
+ * reading as light leaking through the rock.
+ */
+function plateauWeight(
+  fields: Fields,
+  params: GenParams,
+  x: number,
+  y: number,
+  z: number,
+): number {
+  const hEff = Math.max(fields.sampleGround(x, z), y);
+  const top = smoothstep(hEff - 1.7, hEff - 1.1, y);
+  if (top <= 0) return 0;
+  const interior = smoothstep(1.1, 1.7, -fields.sampleS2(x, z));
+  const tall = smoothstep(params.wallHeight * 0.6, params.wallHeight * 0.8, y);
+  const high = Math.max(interior, tall) * smoothstep(params.wallHeight * 0.35, params.wallHeight * 0.5, hEff);
+  return top * high;
 }
 
 function fbm2Cheap(n2: NoiseKit['n2'], x: number, z: number): number {

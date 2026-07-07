@@ -32,6 +32,8 @@ export interface GenParams {
   ridgeFreq: number;
   terraceStep: number; // strata terrace height
   terraceAmt: number; // 0..1 blend of terracing on walls
+  terraceSharp: number; // 0 = smooth ramps, 1 = near-vertical risers
+  ledgeAmp: number; // 3D caprock lips protruding per strata band, world units
   talusAmp: number; // debris slope height at wall base
   talusFall: number; // talus falloff distance
   wallNoiseAmp: number; // 3D roughness carved into cliff faces
@@ -57,6 +59,22 @@ export interface GenParams {
   pillarCount: number;
   screeClusters: number;
   screeSize: number;
+
+  // 3D carve ops (research/voxel3d)
+  archCount: number; // arches: rock plug + vault cut over corridor throats
+  archDepth: number; // along-corridor rock thickness of the arch, world units
+  archThickness: number; // rock above the vault apex (cap), world units
+  archClearance: number; // min vault apex height over the floor, world units
+  archMaxSpan: number; // max wall-to-wall span, world units
+  windowCount: number; // holes punched through thin high fins
+  windowRadius: number; // window hole radius, world units
+
+  // basal wash: erosion notch at wall bases -> overhangs & grottoes,
+  // gated by a map-wide large-scale noise mask (patchy, not everywhere)
+  washAmp: number; // max notch depth into the wall, world units
+  washHeight: number; // notch band height above the floor, world units
+  washCoverage: number; // 0..1 fraction of the mask that washes
+  washScale: number; // mask frequency — lower = larger washed regions
 
   // meshing
   voxelSize: number;
@@ -85,8 +103,25 @@ export interface RenderOptions {
   texContrast: number;
   /** texture hue bleed into the vertex palette (0 = pure luminance) */
   texHue: number;
+  /** texture own-color blend: 0 = tint over palette, 1 = texture albedo */
+  texAlbedo: number;
+  /** pre-v0.16 shading (emboss bump, no normal maps/albedo) for A/B */
+  legacyShading: boolean;
+  /** tri-planar blend sharpness (pow exponent; classic = 4) */
+  texBlendPow: number;
+  /** noise displacement of the projection transition boundary, 0..1 */
+  texBlendNoise: number;
+  /** world-space frequency of the blend noise */
+  texBlendNoiseScale: number;
+  /** height-priority layer transitions: 0 = linear fade, 1 = crisp */
+  texLayerCrisp: number;
   /** very-low-frequency macro tonal patchiness */
   texMacro: number;
+  /**
+   * tile detail textures with MirroredRepeat instead of plain Repeat —
+   * hides hard tile edges but needs per-tile normal handedness flips
+   */
+  texMirrorTile: boolean;
   /** baked ambient-occlusion strength (0 = off) */
   aoAmount: number;
   /** sun horizontal angle, degrees */
@@ -132,6 +167,8 @@ export function defaultParams(): GenParams {
     ridgeFreq: 0.22,
     terraceStep: 1.15,
     terraceAmt: 0.75,
+    terraceSharp: 0.65,
+    ledgeAmp: 0.18,
     talusAmp: 0.35,
     talusFall: 1.4,
     wallNoiseAmp: 0.35,
@@ -155,6 +192,19 @@ export function defaultParams(): GenParams {
     screeClusters: 14,
     screeSize: 0.16,
 
+    archCount: 2,
+    archDepth: 2.4,
+    archThickness: 0.8,
+    archClearance: 1.9,
+    archMaxSpan: 8,
+    windowCount: 2,
+    windowRadius: 0.9,
+
+    washAmp: 0.7,
+    washHeight: 1.2,
+    washCoverage: 0.45,
+    washScale: 0.05,
+
     voxelSize: 0.3,
   };
 }
@@ -163,7 +213,9 @@ export function defaultRenderOptions(): RenderOptions {
   return {
     showGrid: true,
     showPassability: false,
-    flatShading: true,
+    // smooth for the new shading path; the legacy toggle flips this to
+    // flat (the classic look) and back — still manually overridable
+    flatShading: false,
     showDecor: true,
     wireframe: false,
     showTexMasks: false,
@@ -174,7 +226,14 @@ export function defaultRenderOptions(): RenderOptions {
     texRough: 0.5,
     texContrast: 1,
     texHue: 0.3,
+    texAlbedo: 0.3,
+    legacyShading: false,
+    texBlendPow: 4,
+    texBlendNoise: 0.35,
+    texBlendNoiseScale: 0.85,
+    texLayerCrisp: 0.6,
     texMacro: 0.3,
+    texMirrorTile: false,
     aoAmount: 0.65,
     sunAzimuth: -57,
     sunElevation: 45,

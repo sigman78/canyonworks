@@ -11,6 +11,8 @@ export interface PanelCallbacks {
   onRenderOptionChanged(): void;
   onEditModeChanged(mode: EditMode): void;
   onBrushRadiusChanged(r: number): void;
+  /** orbit the camera a quarter turn around the map (terrain stays put) */
+  rotateView(dir: 1 | -1): void;
 }
 
 export interface EditState {
@@ -53,11 +55,26 @@ export function buildPanel(
   fProfile.add(params, 'ridgeFreq', 0.05, 0.6, 0.01).name('ridge freq').onFinishChange(regen);
   fProfile.add(params, 'terraceStep', 0.4, 2.5, 0.05).name('terrace step').onFinishChange(regen);
   fProfile.add(params, 'terraceAmt', 0, 1, 0.05).name('terrace amt').onFinishChange(regen);
+  fProfile.add(params, 'terraceSharp', 0, 1, 0.05).name('terrace sharp').onFinishChange(regen);
+  fProfile.add(params, 'ledgeAmp', 0, 0.9, 0.02).name('strata ledges').onFinishChange(regen);
   fProfile.add(params, 'talusAmp', 0, 1.5, 0.05).name('talus amp').onFinishChange(regen);
   fProfile.add(params, 'wallNoiseAmp', 0, 1.2, 0.05).name('cliff roughness').onFinishChange(regen);
   fProfile.add(params, 'wallNoiseFreq', 0.1, 1.5, 0.05).name('roughness freq').onFinishChange(regen);
   fProfile.add(params, 'floorAmp', 0, 1.2, 0.05).name('floor relief').onFinishChange(regen);
   fProfile.close();
+
+  const fCarve = gui.addFolder('3D carve');
+  fCarve.add(params, 'archCount', 0, 6, 1).name('arches').onFinishChange(regen);
+  fCarve.add(params, 'archDepth', 1, 5, 0.1).name('arch depth').onFinishChange(regen);
+  fCarve.add(params, 'archThickness', 0.3, 1.6, 0.05).name('cap thickness').onFinishChange(regen);
+  fCarve.add(params, 'archClearance', 1, 4, 0.1).name('clearance').onFinishChange(regen);
+  fCarve.add(params, 'archMaxSpan', 4, 12, 0.5).name('max span').onFinishChange(regen);
+  fCarve.add(params, 'windowCount', 0, 8, 1).name('fin windows').onFinishChange(regen);
+  fCarve.add(params, 'windowRadius', 0.4, 1.8, 0.05).name('window radius').onFinishChange(regen);
+  fCarve.add(params, 'washAmp', 0, 1.6, 0.05).name('base wash').onFinishChange(regen);
+  fCarve.add(params, 'washHeight', 0.4, 4.5, 0.05).name('wash height').onFinishChange(regen);
+  fCarve.add(params, 'washCoverage', 0, 1, 0.05).name('wash coverage').onFinishChange(regen);
+  fCarve.add(params, 'washScale', 0.02, 0.15, 0.005).name('wash scale').onFinishChange(regen);
 
   const fDecor = gui.addFolder('Decor');
   fDecor.add(params, 'craterCount', 0, 20, 1).name('craters').onFinishChange(regen);
@@ -94,6 +111,7 @@ export function buildPanel(
   fView.add(render, 'showDecor').name('decor').onChange(() => cb.onRenderOptionChanged());
   fView
     .add(render, 'flatShading')
+    .listen()
     .name('flat shading')
     .onChange(() => cb.onRenderOptionChanged());
   fView
@@ -108,6 +126,8 @@ export function buildPanel(
     .add(render, 'showMesaFog')
     .name('mesa fog')
     .onChange(() => cb.onRenderOptionChanged());
+  fView.add({ ccw: () => cb.rotateView(1) }, 'ccw').name('⟲ rotate 90° (Q)');
+  fView.add({ cw: () => cb.rotateView(-1) }, 'cw').name('⟳ rotate 90° (E)');
   const fTweak = gui.addFolder('Render tweaks');
   fTweak.close();
   fTweak
@@ -127,12 +147,40 @@ export function buildPanel(
     .name('sheen')
     .onChange(() => cb.onRenderOptionChanged());
   fTweak
-    .add(render, 'texContrast', 0.3, 1.5, 0.05)
+    .add(render, 'texContrast', 0.3, 2, 0.05)
     .name('detail contrast')
     .onChange(() => cb.onRenderOptionChanged());
   fTweak
     .add(render, 'texHue', 0, 1, 0.05)
     .name('hue bleed')
+    .onChange(() => cb.onRenderOptionChanged());
+  fTweak
+    .add(render, 'texAlbedo', 0, 1, 0.05)
+    .name('tex albedo')
+    .onChange(() => cb.onRenderOptionChanged());
+  fTweak
+    .add(render, 'texBlendPow', 1.5, 64, 0.5)
+    .name('blend crisp')
+    .onChange(() => cb.onRenderOptionChanged());
+  fTweak
+    .add(render, 'texBlendNoise', 0, 1, 0.05)
+    .name('blend noise')
+    .onChange(() => cb.onRenderOptionChanged());
+  fTweak
+    .add(render, 'texBlendNoiseScale', 0.1, 3, 0.05)
+    .name('blend noise scale')
+    .onChange(() => cb.onRenderOptionChanged());
+  fTweak
+    .add(render, 'texLayerCrisp', 0, 1, 0.05)
+    .name('layer crisp')
+    .onChange(() => cb.onRenderOptionChanged());
+  fTweak
+    .add(render, 'texMirrorTile')
+    .name('mirror tiling')
+    .onChange(() => cb.onRenderOptionChanged());
+  fTweak
+    .add(render, 'legacyShading')
+    .name('legacy shading')
     .onChange(() => cb.onRenderOptionChanged());
   fTweak
     .add(render, 'texMacro', 0, 1, 0.05)

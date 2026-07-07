@@ -74,7 +74,10 @@ export function buildDensityVolume(
 
   const amp = params.wallNoiseAmp;
   const nf = params.wallNoiseFreq;
-  const influence = amp * 1.6 + voxel;
+  const ledge = params.ledgeAmp;
+  const stepH = params.terraceStep;
+  // surface can shift by cliff noise + protruding strata ledges
+  const influence = amp * 1.6 + ledge + voxel;
   const { n3 } = noise;
 
   // ---- per-column roughness + surface band + basal wash -------------------
@@ -295,6 +298,12 @@ export function buildDensityVolume(
             const h = groundH[col];
             const r = rough[col];
             const edge = edgeZ || ix === 0 || ix === nx - 1;
+            // per-band phase jitter — SAME formula as the heightfield
+            // terracing in fields.ts, so the 3D lips ride the same strata
+            const tj =
+              ledge > 0.005 && r > 0.001
+                ? fbm2(n2, x * 0.06 + 3.3, z * 0.06 - 6.1, 2) * stepH * 0.6
+                : 0;
             for (let iy = y0; iy < yEnd; iy++) {
               const idx = ix + iy * nx + iz * strideZ;
               if (edge || iy === ny - 1) {
@@ -305,6 +314,17 @@ export function buildDensityVolume(
               let d = h - y;
               if (r > 0.001 && Math.abs(d) < influence) {
                 d += fbm3(n3, x * nf, y * nf * 0.7, z * nf, 3) * r;
+                // strata ledges: each band's upper half (resistant caprock)
+                // protrudes, lower half (soft layer) recesses — the face is
+                // channeled into pronounced benches with an overhang lip
+                // under every cap, even where the slope is too steep for
+                // the heightfield terracing to carve wide treads
+                if (ledge > 0.005 && stepH > 0.01) {
+                  const p = (y + tj) / stepH;
+                  const fr = p - Math.floor(p);
+                  const cap = smoothstep(0.3, 0.56, fr);
+                  d += ledge * (cap - 0.5) * (r / amp);
+                }
               }
               if (washGate) {
                 const g = washGate[col];

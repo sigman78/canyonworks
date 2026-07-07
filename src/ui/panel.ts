@@ -53,6 +53,8 @@ export function buildPanel(
   fProfile.add(params, 'ridgeFreq', 0.05, 0.6, 0.01).name('ridge freq').onFinishChange(regen);
   fProfile.add(params, 'terraceStep', 0.4, 2.5, 0.05).name('terrace step').onFinishChange(regen);
   fProfile.add(params, 'terraceAmt', 0, 1, 0.05).name('terrace amt').onFinishChange(regen);
+  fProfile.add(params, 'terraceSharp', 0, 1, 0.05).name('terrace sharp').onFinishChange(regen);
+  fProfile.add(params, 'ledgeAmp', 0, 0.9, 0.02).name('strata ledges').onFinishChange(regen);
   fProfile.add(params, 'talusAmp', 0, 1.5, 0.05).name('talus amp').onFinishChange(regen);
   fProfile.add(params, 'wallNoiseAmp', 0, 1.2, 0.05).name('cliff roughness').onFinishChange(regen);
   fProfile.add(params, 'wallNoiseFreq', 0.1, 1.5, 0.05).name('roughness freq').onFinishChange(regen);

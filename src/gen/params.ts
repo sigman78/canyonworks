@@ -32,6 +32,8 @@ export interface GenParams {
   ridgeFreq: number;
   terraceStep: number; // strata terrace height
   terraceAmt: number; // 0..1 blend of terracing on walls
+  terraceSharp: number; // 0 = smooth ramps, 1 = near-vertical risers
+  ledgeAmp: number; // 3D caprock lips protruding per strata band, world units
   talusAmp: number; // debris slope height at wall base
   talusFall: number; // talus falloff distance
   wallNoiseAmp: number; // 3D roughness carved into cliff faces
@@ -148,6 +150,8 @@ export function defaultParams(): GenParams {
     ridgeFreq: 0.22,
     terraceStep: 1.15,
     terraceAmt: 0.75,
+    terraceSharp: 0.65,
+    ledgeAmp: 0.18,
     talusAmp: 0.35,
     talusFall: 1.4,
     wallNoiseAmp: 0.35,

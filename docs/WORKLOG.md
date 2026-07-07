@@ -1,5 +1,31 @@
 # Worklog
 
+## 2026-07-06 — v0.15 (research/voxel3d): pronounced stepped walls
+
+User: the existing terrace tweaks are "very minimalistic" — wants a real
+stepped/benched canyon-wall look. Two coordinated changes:
+
+- **Heightfield terracing reworked** (fields.ts): riser sharpness is now a
+  parameter (`terraceSharp`: riser half-width 0.35 -> 0.06, treads go
+  dead-flat at 1); band phase undulated by low-freq fBm so strata lines
+  wander instead of tracing ruler-straight contours; and the flank window
+  widened (stepWeight vs the old parabolic bandWeight, which faded the
+  upper/lower steps into mush — a main cause of the old minimal look).
+- **3D strata benches** (volume.ts): per elevation band, the upper half
+  (resistant caprock) protrudes and the lower half (soft layer) recesses by
+  `ledgeAmp` — the face gets channeled into benches with an overhang lip
+  under every cap even where the slope is too steep for heightfield
+  terracing to carve wide treads (tread width = step/slope ≈ 0.3-0.6 wu
+  here, too narrow on its own — the first lip-only attempt proved that).
+  Band phase uses the SAME jitter formula as fields.ts so the 3D benches
+  ride the heightfield strata. Influence band widened by ledgeAmp so the
+  block classification stays conservative.
+- New "Walls & floor" sliders: `terrace sharp` (default 0.65) and
+  `strata ledges` (default 0.18 — subtle); evaluated in-browser at
+  sharp 0.9 / ledges 0.45 / amt 0.9: walls read as layered buttes with
+  crisp under-cap shadows at gameplay zoom, spurs pick up ringed steps.
+  Those cranked values are in the session localStorage for user tuning.
+
 ## 2026-07-06 — v0.14 (branch `research/voxel3d`): block-sparse density volume
 
 Kickoff of the true-3D terrain research track (goal: arches + overhangs —

@@ -68,7 +68,10 @@ carve ops           3D CSG on the density volume (arches & overhangs track):
                     passability + overlays unaffected.
       |
 3D density          density = groundH - y, plus 3D fBm roughness on the cliff
- (volume.ts)        band only (gives mild overhangs), plus the basal wash:
+ (volume.ts)        band only (gives mild overhangs), plus stepped strata
+                    benches (caprock half-band protrudes, soft half
+                    recesses, phase-aligned with the heightfield
+                    terracing), plus the basal wash:
                     an erosion notch at wall bases (deepest at the floor,
                     fading over washHeight, depth from the 2D SDF) gated by
                     a map-wide large-scale noise mask + detail scallops ->

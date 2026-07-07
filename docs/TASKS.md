@@ -184,6 +184,15 @@
 - [x] `IsoViewer.lookAtWorld` + `window.__cw` dev hook for scripted
       visual verification
 
+## Done (v0.15 — stepped walls)
+
+- [x] Terracing rework: riser sharpness param, undulating band phase,
+      wider flank window (old bandWeight mushed top/bottom steps)
+- [x] 3D strata benches: caprock half-band protrudes / soft half recesses
+      (`ledgeAmp`), aligned with heightfield strata; overhang lip under
+      every cap
+- [x] Sliders: terrace sharp, strata ledges
+
 ## Next (research/voxel3d — arches & overhangs, NO tunnels)
 
 - [ ] Look iteration with user: arch proportions/count, wash

@@ -244,11 +244,16 @@
 - [x] buildDensityVolume port (fill_volume): byte-identical parity on
       test seeds incl. carve ops (JS post-pass) + wash; fill ~1.3-1.4×,
       regen ~12%; wasmGen param (default on) + JS fallback dispatcher
+- [x] Surface nets port (nets.rs): byte-identical (0 pos/idx diffs),
+      2.4× — allocation-bound stages gain most
+- [x] Per-stage perf tracking at TS call sites (core/perf.ts +
+      __cwWasm.pipelineBench): volumeFill 1.35×, nets 2.4×, total
+      345 -> 307 ms; control stages hold 1.0×
+- [ ] AO bake port — biggest JS stage left (~89 ms; 12-dir × 4-radius
+      probes, SIMD/thread-friendly)
 - [ ] SIMD batch evaluation (4-wide v128 noise) and/or f32 kernels —
       the structural speedups the scalar port can't reach
-- [ ] Surface nets port; then AO bake (26-dir probes are the most
-      SIMD/thread-friendly kernel we have); zero-copy views once the
-      consumers live wasm-side too
+- [ ] Zero-copy views + fill/nets fusion once carve ops move wasm-side
 - [ ] Optional: rayon threads behind wasm-bindgen-rayon + a
       coi-serviceworker shim for GH Pages (SharedArrayBuffer headers)
 

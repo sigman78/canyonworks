@@ -1,5 +1,6 @@
 import { fbm3, makeNoise } from './noise';
 import { placeCarveOps } from '../gen/carves';
+import { surfaceNets } from '../gen/surfacenets';
 import { buildDensityVolume } from '../gen/volume';
 import { buildVolume, initWasmGen } from '../gen/volumeWasm';
 
@@ -167,5 +168,136 @@ export async function volParity(): Promise<{
     jsMs: Math.round(jsMs * 10) / 10,
     wasmMs: Math.round(wasmMs * 10) / 10,
     voxels: n,
+  };
+}
+
+/**
+ * Surface-nets parity/bench: builds the FINAL density volume ONCE via the
+ * pure-JS path (buildDensityVolume, carve ops included), then meshes that
+ * SAME data/blockType with the JS surfaceNets and the wasm surface_nets and
+ * byte-compares the streams. Both are expected exactly equal — positions
+ * element-by-element on the Float32Array (the wasm builds in f64 and rounds
+ * to f32 at the end, just like the JS number[] -> Float32Array), indices
+ * element-by-element.
+ *
+ * Usage (dev console / Playwright): `await __cwWasm.netsParity()`
+ */
+export async function netsParity(): Promise<{
+  vertsJs: number;
+  vertsWasm: number;
+  posDiffCount: number;
+  idxDiffCount: number;
+  jsMs: number;
+  wasmMs: number;
+}> {
+  await initWasmGen();
+  const wasm = await wasmGen();
+  const app = (window as unknown as { __cw?: unknown }).__cw as
+    | {
+        grid: Parameters<typeof placeCarveOps>[0];
+        fields: Parameters<typeof placeCarveOps>[1];
+        params: Parameters<typeof placeCarveOps>[2];
+        noise: Parameters<typeof placeCarveOps>[3];
+      }
+    | undefined;
+  if (!app) throw new Error('[wasm-nets] window.__cw not found — run inside the app');
+  const { grid, fields, params, noise } = app;
+  const ops = placeCarveOps(grid, fields, params, noise);
+  const vol = buildDensityVolume(fields, params, noise, ops);
+
+  const t0 = performance.now();
+  const js = surfaceNets(vol.data, vol.nx, vol.ny, vol.nz, vol.voxel, vol.originX, 0, vol.originZ, vol);
+  const jsMs = performance.now() - t0;
+
+  const t1 = performance.now();
+  // .d.ts may lag surface_nets — cast through `any`, same as fill_volume
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const res = (wasm as any).surface_nets(
+    vol.data,
+    vol.blockType,
+    vol.nx >>> 0,
+    vol.ny >>> 0,
+    vol.nz >>> 0,
+    vol.voxel,
+    vol.originX,
+    0, // originY — same value the mesher passes
+    vol.originZ,
+    vol.nbx >>> 0,
+    vol.nby >>> 0,
+  );
+  const wasmPos = res.positions as Float32Array;
+  const wasmIdx = res.indices as Uint32Array;
+  const wasmMs = performance.now() - t1;
+
+  let posDiffCount = Math.abs(js.positions.length - wasmPos.length);
+  const np = Math.min(js.positions.length, wasmPos.length);
+  for (let i = 0; i < np; i++) {
+    if (js.positions[i] !== wasmPos[i]) posDiffCount++;
+  }
+
+  let idxDiffCount = Math.abs(js.indices.length - wasmIdx.length);
+  const ni = Math.min(js.indices.length, wasmIdx.length);
+  for (let i = 0; i < ni; i++) {
+    if (js.indices[i] !== wasmIdx[i]) idxDiffCount++;
+  }
+
+  return {
+    vertsJs: js.positions.length / 3,
+    vertsWasm: wasmPos.length / 3,
+    posDiffCount,
+    idxDiffCount,
+    jsMs: Math.round(jsMs * 10) / 10,
+    wasmMs: Math.round(wasmMs * 10) / 10,
+  };
+}
+
+/**
+ * Per-stage JS-vs-WASM pipeline comparison: runs full regenerates with
+ * wasmGen off, then on, averaging the call-site stage timings (core/perf)
+ * across runs. Also prints a ready-to-read console.table. Stages that have
+ * no wasm path yet (layout, fields, ao, colorize, decor…) act as the
+ * control group — their deltas should be noise.
+ */
+export async function pipelineBench(runs = 3): Promise<{
+  stages: Record<string, { jsMs: number; wasmMs: number; speedup: number }>;
+  totalJsMs: number;
+  totalWasmMs: number;
+}> {
+  await initWasmGen();
+  const { lastPerf } = await import('./perf');
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const app = (window as any).__cw;
+  if (!app) throw new Error('app not ready (__cw missing)');
+
+  const measure = (useWasm: boolean): Record<string, number> => {
+    const acc: Record<string, number> = {};
+    app.params.wasmGen = useWasm;
+    app.regenerate(false); // warm-up, not counted
+    for (let i = 0; i < runs; i++) {
+      app.regenerate(false);
+      for (const [k, v] of Object.entries(lastPerf)) acc[k] = (acc[k] ?? 0) + v / runs;
+    }
+    return acc;
+  };
+
+  const js = measure(false);
+  const wasm = measure(true);
+  app.params.wasmGen = true;
+
+  const stages: Record<string, { jsMs: number; wasmMs: number; speedup: number }> = {};
+  let totalJsMs = 0;
+  let totalWasmMs = 0;
+  for (const k of Object.keys(js)) {
+    const j = Math.round(js[k] * 10) / 10;
+    const w = Math.round((wasm[k] ?? 0) * 10) / 10;
+    stages[k] = { jsMs: j, wasmMs: w, speedup: w > 0 ? Math.round((j / w) * 100) / 100 : 0 };
+    totalJsMs += j;
+    totalWasmMs += w;
+  }
+  console.table(stages);
+  return {
+    stages,
+    totalJsMs: Math.round(totalJsMs * 10) / 10,
+    totalWasmMs: Math.round(totalWasmMs * 10) / 10,
   };
 }

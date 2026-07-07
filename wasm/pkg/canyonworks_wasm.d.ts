@@ -1,6 +1,14 @@
 /* tslint:disable */
 /* eslint-disable */
 
+export class NetsResult {
+    private constructor();
+    free(): void;
+    [Symbol.dispose](): void;
+    readonly indices: Uint32Array;
+    readonly positions: Float32Array;
+}
+
 /**
  * Mirror of core/noise.ts `NoiseKit` — same seed derivation
  * (`seed ^ 0x2f6e2b1` / `seed ^ 0x5b7e4d3`), same output values.
@@ -49,13 +57,23 @@ export class VolumeResult {
  */
 export function fill_volume(seed: number, nx: number, ny: number, nz: number, voxel: number, origin_x: number, origin_z: number, ground_h: Float32Array, wall_mask: Float32Array, s2: Float32Array, params: Float64Array, op_bounds: Float64Array, force_all_mixed: boolean): VolumeResult;
 
+/**
+ * Port of surfaceNets(): one vertex per sign-crossing cell (centroid of
+ * edge intersections), quads (as triangle pairs) across every sign-changing
+ * grid edge. Convention: density > 0 is solid rock, <= 0 is air.
+ */
+export function surface_nets(data: Float32Array, block_type: Uint8Array, nx: number, ny: number, nz: number, voxel: number, origin_x: number, origin_y: number, origin_z: number, nbx: number, nby: number): NetsResult;
+
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
+    readonly __wbg_netsresult_free: (a: number, b: number) => void;
     readonly __wbg_noisekit_free: (a: number, b: number) => void;
     readonly __wbg_volumeresult_free: (a: number, b: number) => void;
     readonly fill_volume: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number) => number;
+    readonly netsresult_indices: (a: number) => [number, number];
+    readonly netsresult_positions: (a: number) => [number, number];
     readonly noisekit_fbm2: (a: number, b: number, c: number, d: number) => number;
     readonly noisekit_fbm3: (a: number, b: number, c: number, d: number, e: number) => number;
     readonly noisekit_fill_fbm3: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];
@@ -63,6 +81,7 @@ export interface InitOutput {
     readonly noisekit_noise2: (a: number, b: number, c: number) => number;
     readonly noisekit_noise3: (a: number, b: number, c: number, d: number) => number;
     readonly noisekit_ridged2: (a: number, b: number, c: number, d: number) => number;
+    readonly surface_nets: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number) => number;
     readonly volumeresult_block_type: (a: number) => [number, number];
     readonly volumeresult_data: (a: number) => [number, number];
     readonly volumeresult_mixed_count: (a: number) => number;

@@ -1,5 +1,37 @@
 # Worklog
 
+## 2026-07-06 — WASM surface nets + per-stage perf tracking (feature/wasm-gen, stage 3)
+
+surfaceNets ported to Rust (`wasm/src/nets.rs`, `surface_nets`) — takes
+the FINAL volume data (carve-op post-pass already applied), so it can't
+fuse with fill_volume until ops are ported; the ~4 MB data copy in is
+milliseconds. Exactness traps that mattered: JS builds positions in a
+number[] (f64) and rounds to f32 only at return, while the
+diagonal-split tie-break (diagSq) and the degenerate-triangle test read
+the UNROUNDED values — the Rust port builds in Vec<f64> the same way.
+Corner buffer stays f32 like the JS Float32Array. Parity: **byte-
+identical on both test seeds** — same vertex count, 0 position diffs,
+0 index diffs (65.6k / 76.8k verts).
+
+Per-stage perf tracking (user request — measure each JS→WASM
+replacement at its TS call site): `core/perf.ts` marks around every
+pipeline stage in regenerate/buildTerrainGeometry, `[perf]` debug line
+per regenerate, and `__cwWasm.pipelineBench(runs)` regenerates with
+wasmGen off/on and console.tables the comparison. No Rust-side
+instrumentation — call-site timing includes boundary copies, which is
+the honest number.
+
+Pipeline table (4-run avg, seed 59439):
+  volumeFill   82.5 -> 61.2 ms  (1.35×)  [wasm]
+  surfaceNets  30.3 -> 12.6 ms  (2.4×)   [wasm]
+  aoBake       88.6 ms   [next target — biggest JS stage left]
+  colorize     36.2 ms | fields 28.5 | fogOverlays 55.3 | normals 10.8
+  total        345 -> 307 ms
+Control stages (normals/colorize/ao/fog) hold at ~1.0× as expected.
+Nets beats fill on speedup because the JS version pays number[].push +
+GC churn, which Rust's Vec eliminates — allocation-bound stages gain
+more than compute-bound ones.
+
 ## 2026-07-06 — WASM volume fill (feature/wasm-gen, stage 2)
 
 buildDensityVolume ported to Rust (`wasm/src/volume.rs`, `fill_volume`),

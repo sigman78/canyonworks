@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { HexGrid } from './core/hex';
 import { makeNoise, type NoiseKit } from './core/noise';
+import { perfBegin, perfLog, perfMark } from './core/perf';
 import { placeCarveOps } from './gen/carves';
 import { buildDecor } from './gen/decor';
 import { buildFields, computeObstructed, type Fields } from './gen/fields';
@@ -191,6 +192,7 @@ class App {
   /** Full pipeline: layout -> fields -> mesh -> decor -> overlays. */
   regenerate(fitView: boolean): void {
     const t0 = performance.now();
+    perfBegin();
     saveParams(this.params);
 
     // map size may have changed
@@ -205,9 +207,12 @@ class App {
 
     this.noise = makeNoise(this.params.seed);
     this.layout = generateLayout(this.grid, this.params, this.noise, edits);
+    perfMark('layout');
     this.fields = buildFields(this.grid, this.layout.open, this.params, this.noise);
+    perfMark('fields');
 
     const carves = placeCarveOps(this.grid, this.fields, this.params, this.noise);
+    perfMark('carves');
     const terrain = buildTerrainGeometry(this.fields, this.params, this.noise, carves);
 
     // swap scene content
@@ -233,6 +238,7 @@ class App {
     this.blocked = decor.blocked;
     this.obstructed = computeObstructed(this.grid, this.layout.open, this.fields, this.params);
     this.mapRoot.add(this.decorGroup);
+    perfMark('decor');
 
     if (this.fogGroup) {
       this.mapRoot.remove(this.fogGroup);
@@ -243,6 +249,8 @@ class App {
 
     this.rebuildOverlays();
     this.applyRenderOptions();
+    perfMark('fogOverlays');
+    perfLog();
 
     const halfW = (this.grid.maxX - this.grid.minX) / 2;
     const halfD = (this.grid.maxZ - this.grid.minZ) / 2;

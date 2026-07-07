@@ -5,9 +5,11 @@
 //! core/noise.ts makeNoise(). Later stages move the volume fill, surface
 //! nets and AO bake here.
 
+mod nets;
 mod noise;
 mod volume;
 
+pub use nets::{surface_nets, NetsResult};
 pub use volume::{fill_volume, VolumeResult};
 
 use noise::{fbm2, fbm3, ridged2, Noise2, Noise3};

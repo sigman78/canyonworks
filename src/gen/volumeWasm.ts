@@ -3,6 +3,7 @@ import { wasmGen } from '../core/wasmGen';
 import type { CarveOp } from './carves';
 import type { Fields } from './fields';
 import type { GenParams } from './params';
+import { surfaceNets, type NetsResult } from './surfacenets';
 import { BLOCK, buildDensityVolume, type DensityVolume } from './volume';
 
 /**
@@ -53,6 +54,47 @@ export function buildVolume(
   const ms = performance.now() - t0;
   console.debug(`[wasm-vol] fill ${ms.toFixed(1)}ms (${useWasm ? 'wasm' : 'js fallback'})`);
   return vol;
+}
+
+/**
+ * Surface-nets dispatcher (stage 3): meshes the FINAL volume data (the
+ * carve-op post-pass has already been applied by buildVolume above). The
+ * wasm `surface_nets` (wasm/src/nets.rs) always runs with block info —
+ * vol.blockType is always present — and its visit order matches the JS
+ * surfaceNets exactly, so the streams are byte-identical. originY is 0,
+ * the same value the mesher passed to the JS surfaceNets.
+ */
+export function buildNets(vol: DensityVolume, params: GenParams): NetsResult {
+  const useWasm = params.wasmGen !== false && wasmModule !== null;
+  const t0 = performance.now();
+  let nets: NetsResult;
+  if (useWasm) {
+    // generated .d.ts may lag surface_nets/NetsResult — cast through `any`
+    // at this one call, same pattern as fill_volume above
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const res = (wasmModule as any).surface_nets(
+      vol.data,
+      vol.blockType,
+      vol.nx >>> 0,
+      vol.ny >>> 0,
+      vol.nz >>> 0,
+      vol.voxel,
+      vol.originX,
+      0, // originY
+      vol.originZ,
+      vol.nbx >>> 0,
+      vol.nby >>> 0,
+    );
+    nets = {
+      positions: res.positions as Float32Array,
+      indices: res.indices as Uint32Array,
+    };
+  } else {
+    nets = surfaceNets(vol.data, vol.nx, vol.ny, vol.nz, vol.voxel, vol.originX, 0, vol.originZ, vol);
+  }
+  const ms = performance.now() - t0;
+  console.debug(`[wasm-nets] mesh ${ms.toFixed(1)}ms (${useWasm ? 'wasm' : 'js fallback'})`);
+  return nets;
 }
 
 /** PARAMS vector order — MUST match wasm/src/volume.rs exactly (see ABI spec). */

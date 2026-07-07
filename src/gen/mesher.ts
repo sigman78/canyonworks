@@ -1,11 +1,11 @@
 import * as THREE from 'three';
 import { clamp01, fbm2, fbm3, ridged2, smoothstep, type NoiseKit } from '../core/noise';
+import { lastPerf, perfMark } from '../core/perf';
 import type { Fields } from './fields';
 import type { GenParams } from './params';
 import type { CarveOp } from './carves';
-import { surfaceNets } from './surfacenets';
 import { BLOCK, type DensityVolume } from './volume';
-import { buildVolume } from './volumeWasm';
+import { buildNets, buildVolume } from './volumeWasm';
 
 export interface TerrainResult {
   geometry: THREE.BufferGeometry;
@@ -27,31 +27,33 @@ export function buildTerrainGeometry(
   noise: NoiseKit,
   ops: readonly CarveOp[] = [],
 ): TerrainResult {
-  const t0 = performance.now();
   const vol = buildVolume(fields, params, noise, ops);
   const { data, nx, ny, nz, voxel, originX, originZ } = vol;
-  const t1 = performance.now();
+  perfMark('volumeFill');
 
-  const nets = surfaceNets(data, nx, ny, nz, voxel, originX, 0, originZ, vol);
-  const t2 = performance.now();
+  const nets = buildNets(vol, params);
+  perfMark('surfaceNets');
 
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(nets.positions, 3));
   geometry.setIndex(new THREE.BufferAttribute(nets.indices, 1));
   geometry.computeVertexNormals();
+  perfMark('normals');
 
   bakeAo(geometry, data, nx, ny, nz, voxel, originX, originZ);
-  const t3 = performance.now();
+  perfMark('aoBake');
   colorize(geometry, fields, params, noise, vol);
-  const t4 = performance.now();
+  perfMark('colorize');
 
   const nBlocks = vol.nbx * vol.nby * vol.nbz;
   console.debug(
     `[mesher] ${nx}x${ny}x${nz} vox, blocks ${nBlocks} ` +
       `(mixed ${vol.mixedCount} = ${Math.round((vol.mixedCount / nBlocks) * 100)}%, ` +
-      `solid ${vol.solidCount}) | fill ${(t1 - t0).toFixed(1)}ms, ` +
-      `nets ${(t2 - t1).toFixed(1)}ms, normals+ao ${(t3 - t2).toFixed(1)}ms, ` +
-      `color ${(t4 - t3).toFixed(1)}ms`,
+      `solid ${vol.solidCount}) | fill ${(lastPerf.volumeFill ?? 0).toFixed(1)}ms, ` +
+      `nets ${(lastPerf.surfaceNets ?? 0).toFixed(1)}ms, ` +
+      `normals ${(lastPerf.normals ?? 0).toFixed(1)}ms, ` +
+      `ao ${(lastPerf.aoBake ?? 0).toFixed(1)}ms, ` +
+      `color ${(lastPerf.colorize ?? 0).toFixed(1)}ms`,
   );
 
   return {

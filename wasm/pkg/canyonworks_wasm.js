@@ -1,5 +1,43 @@
 /* @ts-self-types="./canyonworks_wasm.d.ts" */
 
+export class NetsResult {
+    static __wrap(ptr) {
+        const obj = Object.create(NetsResult.prototype);
+        obj.__wbg_ptr = ptr;
+        NetsResultFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+    }
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        NetsResultFinalization.unregister(this);
+        return ptr;
+    }
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_netsresult_free(ptr, 0);
+    }
+    /**
+     * @returns {Uint32Array}
+     */
+    get indices() {
+        const ret = wasm.netsresult_indices(this.__wbg_ptr);
+        var v1 = getArrayU32FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
+    }
+    /**
+     * @returns {Float32Array}
+     */
+    get positions() {
+        const ret = wasm.netsresult_positions(this.__wbg_ptr);
+        var v1 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
+    }
+}
+if (Symbol.dispose) NetsResult.prototype[Symbol.dispose] = NetsResult.prototype.free;
+
 /**
  * Mirror of core/noise.ts `NoiseKit` — same seed derivation
  * (`seed ^ 0x2f6e2b1` / `seed ^ 0x5b7e4d3`), same output values.
@@ -208,6 +246,32 @@ export function fill_volume(seed, nx, ny, nz, voxel, origin_x, origin_z, ground_
     const ret = wasm.fill_volume(seed, nx, ny, nz, voxel, origin_x, origin_z, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, force_all_mixed);
     return VolumeResult.__wrap(ret);
 }
+
+/**
+ * Port of surfaceNets(): one vertex per sign-crossing cell (centroid of
+ * edge intersections), quads (as triangle pairs) across every sign-changing
+ * grid edge. Convention: density > 0 is solid rock, <= 0 is air.
+ * @param {Float32Array} data
+ * @param {Uint8Array} block_type
+ * @param {number} nx
+ * @param {number} ny
+ * @param {number} nz
+ * @param {number} voxel
+ * @param {number} origin_x
+ * @param {number} origin_y
+ * @param {number} origin_z
+ * @param {number} nbx
+ * @param {number} nby
+ * @returns {NetsResult}
+ */
+export function surface_nets(data, block_type, nx, ny, nz, voxel, origin_x, origin_y, origin_z, nbx, nby) {
+    const ptr0 = passArrayF32ToWasm0(data, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArray8ToWasm0(block_type, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.surface_nets(ptr0, len0, ptr1, len1, nx, ny, nz, voxel, origin_x, origin_y, origin_z, nbx, nby);
+    return NetsResult.__wrap(ret);
+}
 function __wbg_get_imports() {
     const import0 = {
         __proto__: null,
@@ -230,6 +294,9 @@ function __wbg_get_imports() {
     };
 }
 
+const NetsResultFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_netsresult_free(ptr, 1));
 const NoiseKitFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_noisekit_free(ptr, 1));
@@ -240,6 +307,11 @@ const VolumeResultFinalization = (typeof FinalizationRegistry === 'undefined')
 function getArrayF32FromWasm0(ptr, len) {
     ptr = ptr >>> 0;
     return getFloat32ArrayMemory0().subarray(ptr / 4, ptr / 4 + len);
+}
+
+function getArrayU32FromWasm0(ptr, len) {
+    ptr = ptr >>> 0;
+    return getUint32ArrayMemory0().subarray(ptr / 4, ptr / 4 + len);
 }
 
 function getArrayU8FromWasm0(ptr, len) {
@@ -267,12 +339,27 @@ function getStringFromWasm0(ptr, len) {
     return decodeText(ptr >>> 0, len);
 }
 
+let cachedUint32ArrayMemory0 = null;
+function getUint32ArrayMemory0() {
+    if (cachedUint32ArrayMemory0 === null || cachedUint32ArrayMemory0.byteLength === 0) {
+        cachedUint32ArrayMemory0 = new Uint32Array(wasm.memory.buffer);
+    }
+    return cachedUint32ArrayMemory0;
+}
+
 let cachedUint8ArrayMemory0 = null;
 function getUint8ArrayMemory0() {
     if (cachedUint8ArrayMemory0 === null || cachedUint8ArrayMemory0.byteLength === 0) {
         cachedUint8ArrayMemory0 = new Uint8Array(wasm.memory.buffer);
     }
     return cachedUint8ArrayMemory0;
+}
+
+function passArray8ToWasm0(arg, malloc) {
+    const ptr = malloc(arg.length * 1, 1) >>> 0;
+    getUint8ArrayMemory0().set(arg, ptr / 1);
+    WASM_VECTOR_LEN = arg.length;
+    return ptr;
 }
 
 function passArrayF32ToWasm0(arg, malloc) {
@@ -312,6 +399,7 @@ function __wbg_finalize_init(instance, module) {
     wasmModule = module;
     cachedFloat32ArrayMemory0 = null;
     cachedFloat64ArrayMemory0 = null;
+    cachedUint32ArrayMemory0 = null;
     cachedUint8ArrayMemory0 = null;
     wasm.__wbindgen_start();
     return wasm;

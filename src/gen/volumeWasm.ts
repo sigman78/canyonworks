@@ -137,6 +137,72 @@ export function tryWasmAo(
   return ao;
 }
 
+/**
+ * Colorize dispatcher (stage 5): wasm attempt only — returns null when
+ * `params.wasmGen === false` or the module hasn't finished loading, and the
+ * CALLER falls back to the pure-JS colorizeJs in ./mesher (the fallback
+ * lives there, not here, so this module never imports the mesher — that
+ * would be an import cycle; for the same reason the 45-value palette is
+ * flattened AT the call site from TERRAIN_PALETTE, which is local to the
+ * mesher, and handed in here). The JS path is timed by the mesher's
+ * colorize perf mark; only the wasm path logs here.
+ */
+export function tryWasmColorize(
+  positions: Float32Array,
+  normals: Float32Array,
+  fields: Fields,
+  params: GenParams,
+  palette: Float64Array,
+  vol: DensityVolume,
+): { colors: Float32Array; facies: Float32Array } | null {
+  if (params.wasmGen === false || wasmModule === null) return null;
+  const t0 = performance.now();
+  // generated .d.ts may lag colorize — cast through `any` at this one call,
+  // same pattern as fill_volume/surface_nets/bake_ao above
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const res = (wasmModule as any).colorize(
+    positions,
+    normals,
+    vol.data,
+    vol.nx >>> 0,
+    vol.ny >>> 0,
+    vol.nz >>> 0,
+    vol.voxel,
+    vol.originX,
+    vol.originZ,
+    fields.nx >>> 0,
+    fields.nz >>> 0,
+    fields.voxel,
+    fields.originX,
+    fields.originZ,
+    fields.groundH,
+    fields.s2,
+    fields.crackD,
+    fields.craterD,
+    flattenColorParams(params),
+    palette,
+    params.seed >>> 0,
+  );
+  const out = {
+    colors: res.colors as Float32Array,
+    facies: res.facies as Float32Array,
+  };
+  console.debug(`[wasm-color] ${(performance.now() - t0).toFixed(1)}ms (wasm)`);
+  return out;
+}
+
+/**
+ * COLOR PARAMS vector order — MUST match wasm/src/colorize.rs exactly:
+ * [0] terraceStep, [1] wallHeight, [2] wallVar.
+ */
+export function flattenColorParams(params: GenParams): Float64Array {
+  return new Float64Array([
+    params.terraceStep, // 0
+    params.wallHeight, // 1
+    params.wallVar, // 2
+  ]);
+}
+
 /** PARAMS vector order — MUST match wasm/src/volume.rs exactly (see ABI spec). */
 function flattenParams(params: GenParams): Float64Array {
   return new Float64Array([

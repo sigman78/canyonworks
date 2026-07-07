@@ -1,5 +1,31 @@
 # Worklog
 
+## 2026-07-06 — WASM colorize (feature/wasm-gen, stage 5)
+
+colorize ported (`wasm/src/colorize.rs`): bilinear field samplers over
+the raw grids, nearest crater sampler, plateauWeight, all three color
+branches, cave-tint probe, crack shading. The palette (15 colors × 3)
+crosses the boundary PER CALL — the Palette panel mutates live Colors,
+so caching wasm-side would freeze user tweaks; mesher flattens it at
+the call site (also avoids a mesher↔volumeWasm import cycle).
+`tryWasmColorize(...) ?? colorizeJs(...)` dispatch like AO.
+
+Parity: **exactly 0 diffs on colors AND facies, both seeds** — the
+flagged sin/exp transcendental risk didn't materialize either (V8 and
+Rust libm agree on these input ranges; that's now 5 for 5 kernels
+byte-identical). Visual check: full-wasm regenerate renders correctly.
+
+Pipeline table (4-run avg, wasm vs js):
+  volumeFill   81.5 -> 61.9 ms  (1.32×)
+  surfaceNets  31.5 -> 13.9 ms  (2.27×)
+  aoBake       91.5 -> 38.5 ms  (2.38×)
+  colorize     36.9 -> 21.8 ms  (1.69×)
+  total       357   -> 243 ms   (1.47× end-to-end)
+(The "fields 1.32×" row is GC-coupling noise — fields has no wasm path
+yet; JS-mode runs carry more allocation pressure from the JS kernels.)
+Next: fields profile loop + EDT; fogOverlays (56 ms) is three.js
+object building — not a wasm candidate.
+
 ## 2026-07-06 — WASM AO bake (feature/wasm-gen, stage 4)
 
 bakeAo ported (`wasm/src/ao.rs`, `bake_ao`): 12-ray fan (order-exact

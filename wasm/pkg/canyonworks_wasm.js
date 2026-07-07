@@ -1,5 +1,43 @@
 /* @ts-self-types="./canyonworks_wasm.d.ts" */
 
+export class ColorizeResult {
+    static __wrap(ptr) {
+        const obj = Object.create(ColorizeResult.prototype);
+        obj.__wbg_ptr = ptr;
+        ColorizeResultFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+    }
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        ColorizeResultFinalization.unregister(this);
+        return ptr;
+    }
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_colorizeresult_free(ptr, 0);
+    }
+    /**
+     * @returns {Float32Array}
+     */
+    get colors() {
+        const ret = wasm.colorizeresult_colors(this.__wbg_ptr);
+        var v1 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
+    }
+    /**
+     * @returns {Float32Array}
+     */
+    get facies() {
+        const ret = wasm.colorizeresult_facies(this.__wbg_ptr);
+        var v1 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
+    }
+}
+if (Symbol.dispose) ColorizeResult.prototype[Symbol.dispose] = ColorizeResult.prototype.free;
+
 export class NetsResult {
     static __wrap(ptr) {
         const obj = Object.create(NetsResult.prototype);
@@ -238,6 +276,58 @@ export function bake_ao(positions, normals, data, nx, ny, nz, voxel, origin_x, o
 }
 
 /**
+ * Port of colorizeJs(): one rgb color + one xyz facies triple per vertex
+ * (positions.len() / 3 each). Volume grid (`nx/ny/nz/voxel/origin_*`) feeds
+ * the cave-tint probe; field grid (`fnx/fnz/fvoxel/forigin_*`) feeds the
+ * groundH/s2/crackD bilinear samplers and the craterD nearest sampler.
+ * Noise is constructed exactly like NoiseKit::new from `seed`.
+ * @param {Float32Array} positions
+ * @param {Float32Array} normals
+ * @param {Float32Array} data
+ * @param {number} nx
+ * @param {number} ny
+ * @param {number} nz
+ * @param {number} voxel
+ * @param {number} origin_x
+ * @param {number} origin_z
+ * @param {number} fnx
+ * @param {number} fnz
+ * @param {number} fvoxel
+ * @param {number} forigin_x
+ * @param {number} forigin_z
+ * @param {Float32Array} ground_h
+ * @param {Float32Array} s2
+ * @param {Float32Array} crack_d
+ * @param {Float32Array} crater_d
+ * @param {Float64Array} params
+ * @param {Float64Array} palette
+ * @param {number} seed
+ * @returns {ColorizeResult}
+ */
+export function colorize(positions, normals, data, nx, ny, nz, voxel, origin_x, origin_z, fnx, fnz, fvoxel, forigin_x, forigin_z, ground_h, s2, crack_d, crater_d, params, palette, seed) {
+    const ptr0 = passArrayF32ToWasm0(positions, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArrayF32ToWasm0(normals, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passArrayF32ToWasm0(data, wasm.__wbindgen_malloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ptr3 = passArrayF32ToWasm0(ground_h, wasm.__wbindgen_malloc);
+    const len3 = WASM_VECTOR_LEN;
+    const ptr4 = passArrayF32ToWasm0(s2, wasm.__wbindgen_malloc);
+    const len4 = WASM_VECTOR_LEN;
+    const ptr5 = passArrayF32ToWasm0(crack_d, wasm.__wbindgen_malloc);
+    const len5 = WASM_VECTOR_LEN;
+    const ptr6 = passArrayF32ToWasm0(crater_d, wasm.__wbindgen_malloc);
+    const len6 = WASM_VECTOR_LEN;
+    const ptr7 = passArrayF64ToWasm0(params, wasm.__wbindgen_malloc);
+    const len7 = WASM_VECTOR_LEN;
+    const ptr8 = passArrayF64ToWasm0(palette, wasm.__wbindgen_malloc);
+    const len8 = WASM_VECTOR_LEN;
+    const ret = wasm.colorize(ptr0, len0, ptr1, len1, ptr2, len2, nx, ny, nz, voxel, origin_x, origin_z, fnx, fnz, fvoxel, forigin_x, forigin_z, ptr3, len3, ptr4, len4, ptr5, len5, ptr6, len6, ptr7, len7, ptr8, len8, seed);
+    return ColorizeResult.__wrap(ret);
+}
+
+/**
  * Port of buildDensityVolume() minus carve-op SDF evaluation (ops stay in
  * JS); op bounds are still consumed here to force affected blocks MIXED.
  *
@@ -323,6 +413,9 @@ function __wbg_get_imports() {
     };
 }
 
+const ColorizeResultFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_colorizeresult_free(ptr, 1));
 const NetsResultFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_netsresult_free(ptr, 1));

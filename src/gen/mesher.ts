@@ -5,7 +5,7 @@ import type { Fields } from './fields';
 import type { GenParams } from './params';
 import type { CarveOp } from './carves';
 import { BLOCK, type DensityVolume } from './volume';
-import { buildNets, buildVolume, tryWasmAo } from './volumeWasm';
+import { buildNets, buildVolume, tryWasmAo, tryWasmColorize } from './volumeWasm';
 
 export interface TerrainResult {
   geometry: THREE.BufferGeometry;
@@ -46,7 +46,11 @@ export function buildTerrainGeometry(
     computeAoJs(nets.positions, nrm, data, nx, ny, nz, voxel, originX, originZ);
   geometry.setAttribute('ao', new THREE.BufferAttribute(aoArr, 1));
   perfMark('aoBake');
-  colorize(geometry, fields, params, noise, vol);
+  const col =
+    tryWasmColorize(nets.positions, nrm, fields, params, flattenPalette(), vol) ??
+    colorizeJs(nets.positions, nrm, fields, params, noise, vol);
+  geometry.setAttribute('color', new THREE.BufferAttribute(col.colors, 3));
+  geometry.setAttribute('facies', new THREE.BufferAttribute(col.facies, 3));
   perfMark('colorize');
 
   const nBlocks = vol.nbx * vol.nby * vol.nbz;
@@ -158,9 +162,11 @@ export function computeAoJs(
 const C = (hex: number) => new THREE.Color(hex);
 
 /**
- * Sedona palette, baked into vertex colors by colorize(). EXPORTED LIVE
- * OBJECTS: the Palette panel (ui/palettePanel.ts) mutates these Colors
- * and triggers a regenerate — colorize() reads them fresh each run.
+ * Sedona palette, baked into vertex colors by colorizeJs() / the wasm
+ * colorize. EXPORTED LIVE OBJECTS: the Palette panel (ui/palettePanel.ts)
+ * mutates these Colors and triggers a regenerate — colorizeJs() reads them
+ * fresh each run, and flattenPalette() re-snapshots them per call for the
+ * wasm path (never baked into the module).
  */
 export const TERRAIN_PALETTE = {
   /** cliff strata bands, bottom to top */
@@ -189,16 +195,56 @@ const EJECTA = TERRAIN_PALETTE.ejecta;
 const CRACK_DEEP = TERRAIN_PALETTE.crackDeep;
 const CRACK_LIP = TERRAIN_PALETTE.crackLip;
 
-function colorize(
-  geometry: THREE.BufferGeometry,
+/**
+ * PALETTE vector order — MUST match wasm/src/colorize.rs exactly:
+ * strata0..4, floorA, floorB, cap, crevice, craterIn, craterWall, craterRim,
+ * ejecta, crackDeep, crackLip — 15 colors × 3 (r, g, b) = 45 f64 values.
+ * Rebuilt PER CALL and never cached: TERRAIN_PALETTE holds live THREE.Color
+ * objects the Palette panel mutates between regenerates. Components are
+ * linear-space floats passed as-is (the color math is pure lerp/multiply).
+ * Lives here (not in volumeWasm) because volumeWasm importing this module
+ * would close an import cycle — the call site hands the array in.
+ */
+export function flattenPalette(): Float64Array {
+  const list = [
+    ...STRATA,
+    FLOOR_A,
+    FLOOR_B,
+    CAP,
+    CREVICE,
+    CRATER_IN,
+    CRATER_WALL,
+    CRATER_RIM,
+    EJECTA,
+    CRACK_DEEP,
+    CRACK_LIP,
+  ];
+  const out = new Float64Array(list.length * 3);
+  for (let i = 0; i < list.length; i++) {
+    out[i * 3] = list[i].r;
+    out[i * 3 + 1] = list[i].g;
+    out[i * 3 + 2] = list[i].b;
+  }
+  return out;
+}
+
+/**
+ * Vertex colorize: Sedona palette baked into vertex colors + the 3-channel
+ * `facies` morphology attribute. Pure JS fallback for the wasm `colorize`
+ * (dispatched via tryWasmColorize in ./volumeWasm); the caller stores the
+ * returned arrays as the 'color' and 'facies' attributes. Reads the raw
+ * Float32Arrays — identical values to the old BufferAttribute getters
+ * (attribute .array IS the raw Float32Array).
+ */
+export function colorizeJs(
+  positions: Float32Array,
+  normals: Float32Array,
   fields: Fields,
   params: GenParams,
   noise: NoiseKit,
   vol: DensityVolume,
-): void {
-  const pos = geometry.getAttribute('position') as THREE.BufferAttribute;
-  const nrm = geometry.getAttribute('normal') as THREE.BufferAttribute;
-  const count = pos.count;
+): { colors: Float32Array; facies: Float32Array } {
+  const count = positions.length / 3;
   const colors = new Float32Array(count * 3);
 
   // rock-overhead probe (grotto/notch interiors): vertical samples into the
@@ -224,10 +270,10 @@ function colorize(
   const strataStep = Math.max(0.4, params.terraceStep);
 
   for (let i = 0; i < count; i++) {
-    const x = pos.getX(i);
-    const y = pos.getY(i);
-    const z = pos.getZ(i);
-    const nY = nrm.getY(i);
+    const x = positions[i * 3];
+    const y = positions[i * 3 + 1];
+    const z = positions[i * 3 + 2];
+    const nY = normals[i * 3 + 1];
     const s2 = fields.sampleS2(x, z);
 
     const dither = fbm3(noise.n3, x * 0.35, y * 0.5, z * 0.35, 2);
@@ -299,9 +345,9 @@ function colorize(
     // classified as bright sand floor, which pops inside a shadowed wall
     // base and reads like light leaking through the rock.
     {
-      const px = x + nrm.getX(i) * vol.voxel * 0.8;
+      const px = x + normals[i * 3] * vol.voxel * 0.8;
       const py = y + nY * vol.voxel * 0.8;
-      const pz = z + nrm.getZ(i) * vol.voxel * 0.8;
+      const pz = z + normals[i * 3 + 2] * vol.voxel * 0.8;
       let hits = 0;
       for (const s of CAVE_STEPS) {
         if (solidAbove(px, py + s, pz)) hits++;
@@ -326,8 +372,7 @@ function colorize(
     colors[i * 3 + 2] = tmp.b;
   }
 
-  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-  geometry.setAttribute('facies', new THREE.BufferAttribute(facies, 3));
+  return { colors, facies };
 }
 
 /**

@@ -1,6 +1,14 @@
 /* tslint:disable */
 /* eslint-disable */
 
+export class ColorizeResult {
+    private constructor();
+    free(): void;
+    [Symbol.dispose](): void;
+    readonly colors: Float32Array;
+    readonly facies: Float32Array;
+}
+
 export class NetsResult {
     private constructor();
     free(): void;
@@ -54,6 +62,15 @@ export class VolumeResult {
 export function bake_ao(positions: Float32Array, normals: Float32Array, data: Float32Array, nx: number, ny: number, nz: number, voxel: number, origin_x: number, origin_z: number): Float32Array;
 
 /**
+ * Port of colorizeJs(): one rgb color + one xyz facies triple per vertex
+ * (positions.len() / 3 each). Volume grid (`nx/ny/nz/voxel/origin_*`) feeds
+ * the cave-tint probe; field grid (`fnx/fnz/fvoxel/forigin_*`) feeds the
+ * groundH/s2/crackD bilinear samplers and the craterD nearest sampler.
+ * Noise is constructed exactly like NoiseKit::new from `seed`.
+ */
+export function colorize(positions: Float32Array, normals: Float32Array, data: Float32Array, nx: number, ny: number, nz: number, voxel: number, origin_x: number, origin_z: number, fnx: number, fnz: number, fvoxel: number, forigin_x: number, forigin_z: number, ground_h: Float32Array, s2: Float32Array, crack_d: Float32Array, crater_d: Float32Array, params: Float64Array, palette: Float64Array, seed: number): ColorizeResult;
+
+/**
  * Port of buildDensityVolume() minus carve-op SDF evaluation (ops stay in
  * JS); op bounds are still consumed here to force affected blocks MIXED.
  *
@@ -76,13 +93,14 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
-    readonly __wbg_netsresult_free: (a: number, b: number) => void;
+    readonly __wbg_colorizeresult_free: (a: number, b: number) => void;
     readonly __wbg_noisekit_free: (a: number, b: number) => void;
     readonly __wbg_volumeresult_free: (a: number, b: number) => void;
     readonly bake_ao: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number];
+    readonly colorize: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number, s: number, t: number, u: number, v: number, w: number, x: number, y: number, z: number, a1: number, b1: number, c1: number, d1: number) => number;
+    readonly colorizeresult_colors: (a: number) => [number, number];
+    readonly colorizeresult_facies: (a: number) => [number, number];
     readonly fill_volume: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number) => number;
-    readonly netsresult_indices: (a: number) => [number, number];
-    readonly netsresult_positions: (a: number) => [number, number];
     readonly noisekit_fbm2: (a: number, b: number, c: number, d: number) => number;
     readonly noisekit_fbm3: (a: number, b: number, c: number, d: number, e: number) => number;
     readonly noisekit_fill_fbm3: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];
@@ -98,6 +116,9 @@ export interface InitOutput {
     readonly volumeresult_nby: (a: number) => number;
     readonly volumeresult_nbz: (a: number) => number;
     readonly volumeresult_solid_count: (a: number) => number;
+    readonly __wbg_netsresult_free: (a: number, b: number) => void;
+    readonly netsresult_indices: (a: number) => [number, number];
+    readonly netsresult_positions: (a: number) => [number, number];
     readonly __wbindgen_externrefs: WebAssembly.Table;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_free: (a: number, b: number, c: number) => void;

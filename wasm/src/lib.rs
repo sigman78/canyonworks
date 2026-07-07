@@ -6,11 +6,13 @@
 //! nets and AO bake here.
 
 mod ao;
+mod colorize;
 mod nets;
 mod noise;
 mod volume;
 
 pub use ao::bake_ao;
+pub use colorize::{colorize, ColorizeResult};
 pub use nets::{surface_nets, NetsResult};
 pub use volume::{fill_volume, VolumeResult};
 

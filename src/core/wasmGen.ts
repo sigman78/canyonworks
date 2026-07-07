@@ -3,7 +3,7 @@ import { fbm3, makeNoise } from './noise';
 import { placeCarveOps } from '../gen/carves';
 import { surfaceNets } from '../gen/surfacenets';
 import { buildDensityVolume } from '../gen/volume';
-import { buildVolume, initWasmGen } from '../gen/volumeWasm';
+import { buildVolume, initWasmGen, tryWasmColorize } from '../gen/volumeWasm';
 
 /**
  * WASM generator kernels (wasm/ crate, built by `npm run wasm:build`).
@@ -351,10 +351,104 @@ export async function aoParity(): Promise<{
 }
 
 /**
+ * Colorize parity/bench: rebuilds the pipeline up to normals ONCE via the
+ * pure-JS path (buildDensityVolume + surfaceNets + THREE
+ * computeVertexNormals), then colorizes those SAME inputs with the JS
+ * colorizeJs and the wasm colorize (via tryWasmColorize, so the exact
+ * production flattening runs) and compares both output arrays per element.
+ * NOT guaranteed exactly zero: the strata-band jitter uses Math.sin and the
+ * crater-crest / crack-lip gaussians use Math.exp — V8 transcendentals vs
+ * Rust libm can differ by ~1 ULP (see wasm/src/colorize.rs). Expected:
+ * exactDiffCount may be nonzero, but maxDiff < 1e-6; everything else
+ * (bilinear samplers, smoothsteps, noise, lerps) is exact-order IEEE.
+ *
+ * Usage (dev console / Playwright): `await __cwWasm.colorParity()`
+ */
+export async function colorParity(): Promise<{
+  verts: number;
+  colorExactDiff: number;
+  colorMaxDiff: number;
+  faciesExactDiff: number;
+  faciesMaxDiff: number;
+  jsMs: number;
+  wasmMs: number;
+}> {
+  await initWasmGen();
+  // dynamic import: gen/volumeWasm imports this module, and gen/mesher
+  // imports gen/volumeWasm — a static mesher import here would close the
+  // cycle in the static graph
+  const { colorizeJs, flattenPalette } = await import('../gen/mesher');
+  const app = (window as unknown as { __cw?: unknown }).__cw as
+    | {
+        grid: Parameters<typeof placeCarveOps>[0];
+        fields: Parameters<typeof placeCarveOps>[1];
+        params: Parameters<typeof placeCarveOps>[2];
+        noise: Parameters<typeof placeCarveOps>[3];
+      }
+    | undefined;
+  if (!app) throw new Error('[wasm-color] window.__cw not found — run inside the app');
+  const { grid, fields, params, noise } = app;
+  const ops = placeCarveOps(grid, fields, params, noise);
+  const vol = buildDensityVolume(fields, params, noise, ops);
+  const nets = surfaceNets(vol.data, vol.nx, vol.ny, vol.nz, vol.voxel, vol.originX, 0, vol.originZ, vol);
+
+  // same normals as the mesher: THREE's computeVertexNormals on the JS mesh
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(nets.positions, 3));
+  geometry.setIndex(new THREE.BufferAttribute(nets.indices, 1));
+  geometry.computeVertexNormals();
+  const normals = (geometry.getAttribute('normal') as THREE.BufferAttribute).array as Float32Array;
+
+  const t0 = performance.now();
+  const js = colorizeJs(nets.positions, normals, fields, params, noise, vol);
+  const jsMs = performance.now() - t0;
+
+  const t1 = performance.now();
+  const wasm = tryWasmColorize(
+    nets.positions,
+    normals,
+    fields,
+    { ...params, wasmGen: true },
+    flattenPalette(),
+    vol,
+  );
+  const wasmMs = performance.now() - t1;
+  if (!wasm) throw new Error('[wasm-color] wasm module not ready');
+
+  geometry.dispose();
+
+  const compare = (a: Float32Array, b: Float32Array): { exact: number; max: number } => {
+    let exact = Math.abs(a.length - b.length);
+    let max = 0;
+    const n = Math.min(a.length, b.length);
+    for (let i = 0; i < n; i++) {
+      if (a[i] !== b[i]) {
+        exact++;
+        const d = Math.abs(a[i] - b[i]);
+        if (d > max) max = d;
+      }
+    }
+    return { exact, max };
+  };
+  const color = compare(js.colors, wasm.colors);
+  const facies = compare(js.facies, wasm.facies);
+
+  return {
+    verts: nets.positions.length / 3,
+    colorExactDiff: color.exact,
+    colorMaxDiff: color.max,
+    faciesExactDiff: facies.exact,
+    faciesMaxDiff: facies.max,
+    jsMs: Math.round(jsMs * 10) / 10,
+    wasmMs: Math.round(wasmMs * 10) / 10,
+  };
+}
+
+/**
  * Per-stage JS-vs-WASM pipeline comparison: runs full regenerates with
  * wasmGen off, then on, averaging the call-site stage timings (core/perf)
  * across runs. Also prints a ready-to-read console.table. Stages that have
- * no wasm path yet (layout, fields, colorize, decor…) act as the
+ * no wasm path yet (layout, fields, decor…) act as the
  * control group — their deltas should be noise.
  */
 export async function pipelineBench(runs = 3): Promise<{

@@ -4,12 +4,15 @@ import type { Fields } from './fields';
 import type { GenParams } from './params';
 import type { CarveOp } from './carves';
 import { surfaceNets } from './surfacenets';
-import { buildDensityVolume, type DensityVolume } from './volume';
+import { BLOCK, buildDensityVolume, type DensityVolume } from './volume';
 
 export interface TerrainResult {
   geometry: THREE.BufferGeometry;
   vertexCount: number;
   triangleCount: number;
+  /** dense volume footprint vs what true block-sparse storage would hold */
+  voxRawKb: number;
+  voxSparseKb: number;
 }
 
 /**
@@ -54,6 +57,9 @@ export function buildTerrainGeometry(
     geometry,
     vertexCount: nets.positions.length / 3,
     triangleCount: nets.indices.length / 3,
+    voxRawKb: Math.round((nx * ny * nz * 4) / 1024),
+    // mixed blocks store voxels; homogeneous ones just their type byte
+    voxSparseKb: Math.round((vol.mixedCount * BLOCK * BLOCK * BLOCK * 4 + nBlocks) / 1024),
   };
 }
 

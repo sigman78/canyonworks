@@ -11,6 +11,8 @@ export interface PanelCallbacks {
   onRenderOptionChanged(): void;
   onEditModeChanged(mode: EditMode): void;
   onBrushRadiusChanged(r: number): void;
+  /** orbit the camera a quarter turn around the map (terrain stays put) */
+  rotateView(dir: 1 | -1): void;
 }
 
 export interface EditState {
@@ -109,6 +111,7 @@ export function buildPanel(
   fView.add(render, 'showDecor').name('decor').onChange(() => cb.onRenderOptionChanged());
   fView
     .add(render, 'flatShading')
+    .listen()
     .name('flat shading')
     .onChange(() => cb.onRenderOptionChanged());
   fView
@@ -123,6 +126,8 @@ export function buildPanel(
     .add(render, 'showMesaFog')
     .name('mesa fog')
     .onChange(() => cb.onRenderOptionChanged());
+  fView.add({ ccw: () => cb.rotateView(1) }, 'ccw').name('⟲ rotate 90° (Q)');
+  fView.add({ cw: () => cb.rotateView(-1) }, 'cw').name('⟳ rotate 90° (E)');
   const fTweak = gui.addFolder('Render tweaks');
   fTweak.close();
   fTweak
@@ -142,12 +147,40 @@ export function buildPanel(
     .name('sheen')
     .onChange(() => cb.onRenderOptionChanged());
   fTweak
-    .add(render, 'texContrast', 0.3, 1.5, 0.05)
+    .add(render, 'texContrast', 0.3, 2, 0.05)
     .name('detail contrast')
     .onChange(() => cb.onRenderOptionChanged());
   fTweak
     .add(render, 'texHue', 0, 1, 0.05)
     .name('hue bleed')
+    .onChange(() => cb.onRenderOptionChanged());
+  fTweak
+    .add(render, 'texAlbedo', 0, 1, 0.05)
+    .name('tex albedo')
+    .onChange(() => cb.onRenderOptionChanged());
+  fTweak
+    .add(render, 'texBlendPow', 1.5, 64, 0.5)
+    .name('blend crisp')
+    .onChange(() => cb.onRenderOptionChanged());
+  fTweak
+    .add(render, 'texBlendNoise', 0, 1, 0.05)
+    .name('blend noise')
+    .onChange(() => cb.onRenderOptionChanged());
+  fTweak
+    .add(render, 'texBlendNoiseScale', 0.1, 3, 0.05)
+    .name('blend noise scale')
+    .onChange(() => cb.onRenderOptionChanged());
+  fTweak
+    .add(render, 'texLayerCrisp', 0, 1, 0.05)
+    .name('layer crisp')
+    .onChange(() => cb.onRenderOptionChanged());
+  fTweak
+    .add(render, 'texMirrorTile')
+    .name('mirror tiling')
+    .onChange(() => cb.onRenderOptionChanged());
+  fTweak
+    .add(render, 'legacyShading')
+    .name('legacy shading')
     .onChange(() => cb.onRenderOptionChanged());
   fTweak
     .add(render, 'texMacro', 0, 1, 0.05)

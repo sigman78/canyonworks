@@ -193,6 +193,36 @@
       every cap
 - [x] Sliders: terrace sharp, strata ledges
 
+## Done (v0.16 — rendering/textures: real bump + albedo blend)
+
+- [x] Runtime normal-map baking from detail textures (normalMaps.ts)
+- [x] True tri-planar normal mapping for side/floor/mesa (UDN, world
+      space, perturbs the flat-shaded normal)
+- [x] Decor on the same normal-map path (rock.jpg baked) — no more
+      emboss desync
+- [x] Accent-patch emboss restored, mask-weighted (derivatives kept in
+      uniform control flow — branching caused speckles)
+- [x] `tex albedo` slider: vertex-palette tint <-> texture own color
+      (palette luminance preserved)
+- [x] `legacy shading` A/B toggle (runtime uniform, no recompile) —
+      fixed to flip the WHOLE map (accents had no normals and stayed
+      emboss in both modes)
+- [x] GenAI normal maps: generic prompt failed (redrawn + quantized),
+      per-texture hint prompts WORK — tools/gen-normalmaps.mjs writes
+      <name>_n.png for all 9; loader prefers them, Sobel bake fallback
+- [x] Accent normal maps packed 2-per-RGBA (sampler budget: 15/16)
+- [x] HUD: vox raw/sparse KB
+
+## Next (rendering/textures)
+
+- [ ] Regenerate/expand the texture set with richer color + higher res
+      (nano-banana2 key) now that own-color blending makes it matter
+- [ ] Accent layers (dunes/gravel/drift/rubble/crater) currently have no
+      bump under the normal-map path — bake + pack their normals if the
+      loss shows (sampler budget: pack 2 maps per RGBA texture)
+- [ ] Roughness could key off the normal maps' cavity instead of bare
+      luminance
+
 ## Next (research/voxel3d — arches & overhangs, NO tunnels)
 
 - [ ] Look iteration with user: arch proportions/count, wash
@@ -227,3 +257,7 @@
 - Wind-blown dust particles, heat shimmer post FX
 - Minimap render-to-texture (like concept's command console)
 - Biome variants: dark basalt canyon, white sandstone, polar ice
+
+## Done (v0.16 addenda)
+
+- [x] flat/smooth shading toggle now applies to decor meshes too

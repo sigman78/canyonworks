@@ -12,8 +12,16 @@ import { buildPanel } from './ui/panel';
 import { buildGridLines, buildPassabilityOverlay, disposeObject } from './viewer/overlays';
 import { buildMesaFog } from './viewer/mesaFog';
 import {
+  makeNormalHeightTexture,
+  makeNormalTexture,
+  makePackedHeightTexture,
+  makePackedNormalTexture,
+  neutralNormalTexture,
+} from './viewer/normalMaps';
+import {
   applyTriplanarDetail,
   loadDetailTextures,
+  setMirrorTiling,
   type DetailTextures,
   type DetailUniforms,
 } from './viewer/terrainMaterial';
@@ -47,11 +55,36 @@ class App {
     rough: { value: 0.5 },
     contrast: { value: 1 },
     hue: { value: 0.3 },
+    albedo: { value: 0.3 },
+    legacy: { value: 0 },
+    blendPow: { value: 4 },
+    blendNoise: { value: 0.35 },
+    blendNoiseScale: { value: 0.85 },
+    layerCrisp: { value: 0.6 },
     macro: { value: 0.3 },
+    mirror: { value: 0 },
     ao: { value: 0.65 },
     maskDebug: { value: 0 },
     cloud: { value: 0.3 },
     cloudOffset: { value: new THREE.Vector2() },
+  };
+  /** baked async (normalMaps.ts); flat placeholders until then */
+  private readonly normalU = {
+    side: { value: neutralNormalTexture() as THREE.Texture },
+    top: { value: neutralNormalTexture() as THREE.Texture },
+    mesa: { value: neutralNormalTexture() as THREE.Texture },
+    accents: {
+      dg: { value: neutralNormalTexture() as THREE.Texture },
+      cd: { value: neutralNormalTexture() as THREE.Texture },
+      rb: { value: neutralNormalTexture() as THREE.Texture },
+      h: { value: neutralNormalTexture() as THREE.Texture },
+    },
+  };
+  /** rock normal map for decor (all three slots share the rock texture) */
+  private readonly rockNormalU = {
+    side: { value: neutralNormalTexture() as THREE.Texture },
+    top: { value: neutralNormalTexture() as THREE.Texture },
+    mesa: { value: neutralNormalTexture() as THREE.Texture },
   };
 
   private layout!: LayoutResult;
@@ -59,7 +92,7 @@ class App {
   private blocked = new Uint8Array(0);
   private obstructed = new Uint8Array(0);
   private commitTimer: number | null = null;
-  private stats = { genMs: 0, verts: 0, tris: 0, open: 0, playable: 0 };
+  private stats = { genMs: 0, verts: 0, tris: 0, open: 0, playable: 0, voxRawKb: 0, voxSparseKb: 0 };
 
   constructor() {
     this.params = loadParams();
@@ -87,6 +120,24 @@ class App {
         crater: this.detailTex.crater,
       },
       vertexAo: true, // terrain mesh carries the baked ao attribute
+      normalMaps: this.normalU,
+    });
+    // normal maps in the background (authored <name>_n.png if present,
+    // else Sobel-baked from the albedo); shared uniforms swap from flat
+    // placeholders when each is ready
+    makeNormalTexture('cliff').then((t) => (this.normalU.side.value = t));
+    makeNormalTexture('sand', true).then((t) => (this.normalU.top.value = t));
+    makeNormalTexture('mesa', true).then((t) => (this.normalU.mesa.value = t));
+    makePackedNormalTexture('dunes', 'gravel').then((t) => (this.normalU.accents.dg.value = t));
+    makePackedNormalTexture('crater', 'drift').then((t) => (this.normalU.accents.cd.value = t));
+    makeNormalHeightTexture('rubble').then((t) => (this.normalU.accents.rb.value = t));
+    makePackedHeightTexture(['dunes', 'gravel', 'crater', 'drift']).then(
+      (t) => (this.normalU.accents.h.value = t),
+    );
+    makeNormalTexture('rock').then((t) => {
+      this.rockNormalU.side.value = t;
+      this.rockNormalU.top.value = t;
+      this.rockNormalU.mesa.value = t;
     });
 
     this.editor = new BrushEditor(this.grid, this.viewer, {
@@ -109,6 +160,7 @@ class App {
       onRenderOptionChanged: () => this.applyRenderOptions(),
       onEditModeChanged: (m) => this.editor.setMode(m),
       onBrushRadiusChanged: (r) => (this.editor.brushRadius = r),
+      rotateView: (dir) => this.viewer.rotateStep(dir),
     });
 
     this.bindKeys();
@@ -163,6 +215,7 @@ class App {
     const decor = buildDecor(this.grid, this.fields, this.params, this.noise, {
       rock: this.detailTex.rock,
       uniforms: this.detailU,
+      normalMaps: this.rockNormalU,
     });
     this.decorGroup = decor.group;
     this.blocked = decor.blocked;
@@ -193,6 +246,8 @@ class App {
       tris: terrain.triangleCount,
       open: Math.round(this.layout.openFraction * 100),
       playable: Math.round((playable / this.grid.count) * 100),
+      voxRawKb: terrain.voxRawKb,
+      voxSparseKb: terrain.voxSparseKb,
     };
     this.updateHud();
   }
@@ -241,7 +296,16 @@ class App {
     this.mapRoot.add(this.gridLines, this.passOverlay);
   }
 
+  /** tracks the legacy toggle so flipping it swaps the shading default */
+  private lastLegacyShading: boolean | null = null;
+
   private applyRenderOptions(): void {
+    // flat shading is the classic default, smooth the new one — follow the
+    // legacy toggle when it changes (the checkbox stays overridable)
+    if (this.lastLegacyShading !== null && this.lastLegacyShading !== this.render.legacyShading) {
+      this.render.flatShading = this.render.legacyShading;
+    }
+    this.lastLegacyShading = this.render.legacyShading;
     if (this.gridLines) this.gridLines.visible = this.render.showGrid;
     if (this.passOverlay) this.passOverlay.visible = this.render.showPassability;
     if (this.decorGroup) this.decorGroup.visible = this.render.showDecor;
@@ -253,7 +317,15 @@ class App {
     this.terrainMaterial.wireframe = this.render.wireframe;
     this.decorGroup?.traverse((o) => {
       const m = (o as THREE.Mesh).material as THREE.MeshStandardMaterial | undefined;
-      if (m?.isMeshStandardMaterial) m.wireframe = this.render.wireframe;
+      if (m?.isMeshStandardMaterial) {
+        m.wireframe = this.render.wireframe;
+        // flat/smooth shading applies to decor too (rocks/pillars are
+        // created flat; a program recompile is needed on change)
+        if (m.flatShading !== this.render.flatShading) {
+          m.flatShading = this.render.flatShading;
+          m.needsUpdate = true;
+        }
+      }
     });
     this.syncDetailUniforms();
     this.updateHud();
@@ -266,7 +338,15 @@ class App {
     this.detailU.rough.value = this.render.texRough;
     this.detailU.contrast.value = this.render.texContrast;
     this.detailU.hue.value = this.render.texHue;
+    this.detailU.albedo.value = this.render.texAlbedo;
+    this.detailU.legacy.value = this.render.legacyShading ? 1 : 0;
+    this.detailU.blendPow.value = this.render.texBlendPow;
+    this.detailU.blendNoise.value = this.render.texBlendNoise;
+    this.detailU.blendNoiseScale.value = this.render.texBlendNoiseScale;
+    this.detailU.layerCrisp.value = this.render.texLayerCrisp;
     this.detailU.macro.value = this.render.texMacro;
+    this.detailU.mirror.value = this.render.texMirrorTile ? 1 : 0;
+    setMirrorTiling(this.render.texMirrorTile);
     this.detailU.ao.value = this.render.aoAmount;
     this.detailU.maskDebug.value = this.render.showTexMasks ? 1 : 0;
     // cloud shadows belong to the storm look — active only with mesa fog on
@@ -285,6 +365,8 @@ class App {
         case '[': this.editor.brushRadius = Math.max(0.5, this.editor.brushRadius - 0.5); break;
         case ']': this.editor.brushRadius = Math.min(6, this.editor.brushRadius + 0.5); break;
         case 'r': case 'R': this.regenerate(false); break;
+        case 'q': case 'Q': this.viewer.rotateStep(1); break;
+        case 'e': case 'E': this.viewer.rotateStep(-1); break;
         case 'g': case 'G':
           this.render.showGrid = !this.render.showGrid;
           this.applyRenderOptions();
@@ -312,8 +394,9 @@ class App {
     };
     this.hud.innerHTML =
       `<b>${modeNames[this.editor.mode]}</b>  ·  open ${this.stats.open}% / playable ${this.stats.playable}%  ·  ` +
-      `${this.stats.verts.toLocaleString()} verts / ${this.stats.tris.toLocaleString()} tris  ·  gen ${this.stats.genMs} ms\n` +
-      `keys: 1 view · 2 carve · 3 wall · [ ] brush · R regen · G grid · P passability · Ctrl+Z undo\n` +
+      `${this.stats.verts.toLocaleString()} verts / ${this.stats.tris.toLocaleString()} tris  ·  gen ${this.stats.genMs} ms  ·  ` +
+      `vox ${this.stats.voxRawKb.toLocaleString()} KB raw / ${this.stats.voxSparseKb.toLocaleString()} KB sparse\n` +
+      `keys: 1 view · 2 carve · 3 wall · [ ] brush · Q/E rotate · R regen · G grid · P passability · Ctrl+Z undo\n` +
       `mouse: drag pan (left in view mode, middle/right always) · wheel zoom · left paint in brush modes`;
   }
 

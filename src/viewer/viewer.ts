@@ -15,6 +15,12 @@ export class IsoViewer {
   private readonly container: HTMLElement;
   private frustumHalf = 20;
   private readonly camDist = 120;
+  /** view rotation in 90° steps around +Y (0..3); yaw = YAW + steps·π/2 */
+  private yawSteps = 0;
+
+  private get yaw(): number {
+    return YAW + (this.yawSteps * Math.PI) / 2;
+  }
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -90,6 +96,8 @@ export class IsoViewer {
 
   fitView(halfW: number, halfD: number): void {
     const aspect = this.aspect();
+    // at odd quarter turns the map's world axes swap on screen
+    if (this.yawSteps % 2 === 1) [halfW, halfD] = [halfD, halfW];
     const needed = Math.max(halfD * 1.35, halfW / aspect) * 1.12;
     this.frustumHalf = needed;
     this.camera.zoom = 1;
@@ -101,12 +109,18 @@ export class IsoViewer {
     return this.container.clientWidth / Math.max(1, this.container.clientHeight);
   }
 
+  /** rotate the view a quarter turn around the map (+1 or -1 step) */
+  rotateStep(dir: 1 | -1): void {
+    this.yawSteps = (this.yawSteps + dir + 4) % 4;
+    this.updateCamera();
+  }
+
   updateCamera(): void {
     const cp = Math.cos(PITCH);
     this.camera.position.set(
-      this.target.x + this.camDist * cp * Math.sin(YAW),
+      this.target.x + this.camDist * cp * Math.sin(this.yaw),
       this.target.y + this.camDist * Math.sin(PITCH),
-      this.target.z + this.camDist * cp * Math.cos(YAW),
+      this.target.z + this.camDist * cp * Math.cos(this.yaw),
     );
     this.camera.lookAt(this.target);
   }
@@ -115,11 +129,11 @@ export class IsoViewer {
     const h = this.container.clientHeight || 1;
     const worldPerPixel = (2 * this.frustumHalf) / this.camera.zoom / h;
     // screen right in ground plane
-    const rx = Math.cos(YAW);
-    const rz = -Math.sin(YAW);
+    const rx = Math.cos(this.yaw);
+    const rz = -Math.sin(this.yaw);
     // screen up projected onto ground plane
-    const fx = -Math.sin(YAW);
-    const fz = -Math.cos(YAW);
+    const fx = -Math.sin(this.yaw);
+    const fz = -Math.cos(this.yaw);
     const upScale = 1 / Math.sin(PITCH);
     this.target.x += (-dxPixels * rx + dyPixels * fx * upScale) * worldPerPixel;
     this.target.z += (-dxPixels * rz + dyPixels * fz * upScale) * worldPerPixel;

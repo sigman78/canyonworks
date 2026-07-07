@@ -1,6 +1,245 @@
 # Worklog
 
-## 2026-07-06 — v0.15 (research/voxel3d): pronounced stepped walls
+## 2026-07-06 — v0.16 (research/voxel3d): real normal maps + texture albedo blend
+
+Rendering/textures track kickoff (user: textures read as "monochrome
+addition to vertex colors", bump is "an embossing shader trick"; wants real
+bump + a control for texture-own-color vs vertex-propagated color; art
+direction stays stylized-painterly).
+
+- `src/viewer/normalMaps.ts`: tangent-space normal maps baked AT LOAD from
+  the detail textures (luminance height field mixed with a 1/8-scale copy
+  for broad forms, Sobel with mirrored wrap, flipY matched to
+  TextureLoader). No offline asset step — regenerating textures via
+  gen-textures.mjs automatically yields matching normals next run. ~1 s
+  async for 3×1024², flat placeholders until ready.
+- terrainMaterial: true tri-planar normal mapping (UDN swizzle per
+  projection, world→view) for the three dominant surfaces — cliff sides,
+  floor base, mesa top — gated by the `normalMaps` option so decor keeps
+  the old emboss (also keeps the fragment-sampler count under the GL 16
+  limit; accent patch layers dunes/gravel/etc. deliberately have no bump
+  now). **Trap found on the way: the perturbation must MODIFY the existing
+  view-space normal, not rebuild from the smooth vertex normal — replacing
+  it silently discards the flat-shading facets and the whole diorama goes
+  airbrushed-soft.**
+- `tex albedo` slider (Render tweaks, default 0.3): crossfade between the
+  classic multiplicative tint (vertex palette in charge) and the texture's
+  OWN color modulated by the palette's luminance (light/dark structure —
+  crevice shade, cap brightness — survives; hue/chroma come from the
+  texture). At 1.0 the map goes noticeably browner/photographic; 0.2-0.4
+  enriches hue while keeping the Sedona grading.
+- Verified in-browser via slider A/B screenshots: bump 1.2 gives real
+  directional relief on strata (reads at grazing angles where the emboss
+  flattened); facets intact; decor unchanged.
+
+**Feedback round (same day):** texture under-pronounced (detail contrast
+1.35 helps — slider max raised to 2), wants more bumpiness, and decor
+looked desynced (still on the oversharpened emboss).
+
+- Bake strength 2.4 -> 4.5, fine/broad height mix 0.7/0.3.
+- Decor now shares the real normal-map path (rock.jpg baked, one map in
+  all three projection slots) — desync gone.
+- Accent patches (dunes/gravel/crater/drift/rubble) got their emboss bump
+  back, masked to the patches so the normal-mapped base isn't
+  double-bumped. GPU TRAP: the first version branched on the mask, but
+  triGradH uses dFdx/dFdy and screen derivatives inside divergent control
+  flow are undefined — dashed speckle artifacts exactly along mask edges.
+  Derivatives must stay in uniform control flow: compute unconditionally,
+  weight by the mask.
+- **`legacy shading` toggle** (Render tweaks, user request): uniform-driven
+  runtime A/B — 1 restores the full pre-v0.16 pipeline (all-projection
+  emboss, no normal maps, albedo blend forced off) with zero shader
+  recompile. Uniform branches keep derivatives defined.
+
+**GenAI normal-map experiment** (user asked "turn texture into normal map
+via GenAI — will it work?"; tools/gen-normalmap-test.mjs, outputs in
+tools/nmap-test/, gitignored): asked nano-banana2 for (a) a tangent-space
+normal map and (b) a grayscale height map of cliff.jpg, image-to-image.
+First verdict with a GENERIC prompt: not usable — redrawn layout AND
+cartoon-quantized vectors (flat lavender + saturated green/crimson
+stripes).
+
+**Bug report + GenAI insistence (user):** the legacy toggle only flipped
+parts of the map, and the user tried GenAI normal maps themselves with
+okay-ish results — insisted on that route.
+
+- Partial-toggle root cause: accent patches (dunes/gravel/crater/drift/
+  rubble) had no baked normals, so they showed the emboss in BOTH modes —
+  ~a third of the floor never visibly toggled. Fixed by giving every layer
+  a true normal map: accent maps PACKED two-per-RGBA (xy in RG / xy in BA —
+  the UDN blend only needs xy), keeping the terrain material at 15 of the
+  16 guaranteed fragment samplers. Accent emboss removed from the new
+  path; legacy mode keeps the full old emboss; toggle is now uniform.
+- **GenAI maps redeemed by per-texture hint prompts**: tools/
+  gen-normalmaps.mjs writes public/textures/<name>_n.png for all 9
+  textures, each prompt describing what the texture depicts and what
+  should protrude vs recess (strata ledges raised / bedding grooves
+  recessed, stones as bumps, crack lines as grooves...). With hints the
+  outputs have smooth continuous gradients and correct relief semantics —
+  night-and-day vs the generic prompt. Layouts are still redrawn (not
+  pixel-aligned with the albedo) but the painterly style absorbs it.
+- Loader preference (normalMaps.ts): `<name>_n.png` if present, else the
+  runtime Sobel bake — delete a file to fall back; `[normals]` console
+  line says which source each map used.
+- HUD (user request): `vox <raw> KB raw / <sparse> KB sparse` — dense
+  Float32 volume footprint vs what true block-sparse storage would hold
+  (mixed blocks × 4³ × 4B + one type byte per block). ~4.3 MB -> 2.3 MB at
+  current wash-heavy settings.
+- flat/smooth shading toggle now applies to decor materials too (they were
+  hard-coded flat; synced with needsUpdate in applyRenderOptions, so decor
+  rebuilt on regen inherits the current mode).
+
+**Bug report (user): normal maps feel inverted vs the light.** Two real
+sign bugs found:
+
+1. Sobel bake had GREEN inverted: with flipY uploads, +v = image top but
+   the row index grows downward, so n_v = +dy_rows — the bake stored -dy
+   and every ledge lit from below.
+2. **MirroredRepeatWrapping flips alternate tiles, which inverts the xy a
+   normal map ENCODES there** — relief polarity flipped every ~4.5 wu tile
+   (patchy "doesn't match the light" impression). The old screen-space
+   emboss was immune (it differentiates the sampled field), which is why
+   this never showed before. Fix: per-axis sign from tile parity
+   (triMirrorSign) applied to every normal-map sample, authored and baked
+   alike.
+
+After both fixes, ledge lips light on the sun side and shadow beneath,
+pebbles read raised, mesa cracks recessed — verified at two sites against
+the sun azimuth.
+
+Follow-up (user pinpointed): the GenAI-authored maps ALSO have their RED
+channel drawn with inverted handedness (the tool prompt's "slope toward
+right" is ambiguous). Un-detectable automatically (layouts not aligned
+with the albedo) — loader now applies a calibration flip to `_n.png`
+files (`AUTHORED_FLIP_R` / `_G` constants in normalMaps.ts).
+
+**Tri-planar transition controls (user request).** Three new Render
+tweaks: `blend crisp` (projection pow, 1.5-64 — near-step at max),
+`blend noise` (noise displacement of the top/side boundary) and
+`blend noise scale`. Implementation lesson: the noise must offset |N|.y
+BEFORE the sharpening pow — displacing the input moves the boundary line
+itself at any crispness, whereas scaling the weight after the pow shifts
+it by ~ln(f)/p (invisible at high crisp; the first attempt did exactly
+that and "didn't work"). Boundary displacement confined to the y weight:
+the x<->z side boundary uses the same texture, nothing to see. Note on
+visibility: this perturbs which DETAIL TEXTURE projects (cliff vs
+top/mesa), not the vertex-color banding — the pale-cap/strata color line
+is plateauWeight (mesher), a separate knob if noise is wanted there too.
+Legacy mode pins the classic pow-4 blend.
+
+**Height-priority layer transitions (user request).** The horizontal layer
+stacks (floor: sand/dunes/gravel/crater; mesa: slickrock/drift/rubble; and
+the plateau fringe itself) now blend by comparing per-layer HEIGHT +
+mask dominance (classic splat height-lerp): the winning layer keeps crisp
+pixels through the transition zone — stones stay solid over sand instead
+of ghost-fading. `layer crisp` slider (0 = classic linear fade, legacy
+pins it too).
+
+- Heights are GenAI-generated (tools/gen-heightmaps.mjs -> <name>_h.png,
+  per-texture hints: stones/plates white, dust/cracks dark), albedo
+  luminance as fallback for missing files.
+- Channel budget: sand/mesa heights ride in their normal maps' alpha,
+  rubble height in its pack's B, the four accent heights in one packed
+  RGBA (uTriAccH) — terrain lands at exactly 16 fragment samplers (the
+  GL-guaranteed minimum; nothing left, next texture needs an eviction).
+- The sharpened masks are written back into the shared triG* globals, so
+  albedo, normal-map selection, bump and roughness all switch together
+  (user: "obviously affects both albedo and normal maps" — yes).
+- Verified: gravel-over-sand transition at crisp 0 vs 1 — stones fully
+  solid deep into the blend zone vs ghosted crossfade.
+- **Seam fix (user report: hard lines between sandy textures):** between
+  two locally FEATURELESS layers the height pick degenerates — with no
+  height variance, "who is higher" flips along a single contour of the
+  mask: a hard seam. Two-part fix: (1) triHPick fades back to the plain
+  linear mask where |hOver-hUnder| is small (flat sand blends softly,
+  stones stay crisp — a self-tuning transition gap); (2) height maps are
+  mean-centered to 128 at load, since GenAI/luminance heights carry
+  arbitrary global levels and a level offset between layers displaces the
+  whole transition. Also: yes, lerping normal maps' tangent xy is a valid
+  blend (user wondered).
+
+**"Tiling layer problem" (user): visible patches, worse at high bump /
+layer crisp — suspected per-tile parameter desync.** Right instinct,
+different tiles: the patches are the anti-tiling VARIATION REGIONS. The
+albedo goes through triLayered (dual tap: base + rotated second copy,
+swapped over noise-shaped blobs to hide tiling), but normal and height
+maps were sampled with a single plain tap — inside every swap blob the
+color showed the rotated copy while relief/heights showed the base copy.
+Color-vs-bump disagreement over patch-shaped regions, scaling with bump
+strength and layer crisp. Fix: triNmXY/triNmZW dual-tap helpers — both
+taps mirror-corrected, the second tap's tangent xy rotated back through
+the inverse of the triUv2 rotation, blended by the SAME variation field
+(triVar) the albedo uses per texture; heights dual-tapped likewise.
+Also caught: the decor shader variant referenced uTriMesa (layers-only
+uniform) in the new path — undeclared identifier, invalid program (decor
+rendered from stale programs; "program not valid" spam). Gated per
+variant.
+
+**View rotation (user request).** Camera orbits the map in 90° steps —
+the terrain and lighting stay world-anchored (explicit: rotate the
+CAMERA, not the landscape). `IsoViewer.rotateStep(±1)`: yaw becomes
+YAW + steps·π/2; pan()'s screen→ground mapping and fitView's axis fit
+follow the current step (odd steps swap the map's W/D on screen).
+View-folder buttons ⟲/⟳ + Q/E keys (HUD hint updated). Side effects by
+design: shadows/glints change per quarter (sun is world-anchored — flat
+tops catch specular from some angles); known caveat: the mesa fog's
+screen-space apron assumes the default orientation (+x/+z toward screen
+bottom) and sits on the wrong side in rotated views (fog is off by
+default; fix when fog graduates from look-test). Three stacked causes: (1) the
+roughness clamp floor was 0.5, and this light rig (single sun, ortho iso,
+ACES) shows no specular above ~0.35 roughness — the slider's entire range
+was sub-threshold (also silently neutralized earlier global-roughness
+probes); (2) effect gain too small; (3) the layer sheen weights by
+UP-facing surfaces, but with a fixed sun/camera the half-vector sits ~37°
+off vertical — flat ground physically can't glint, only tilted facets can,
+and those were barely touched. Fixes: clamp floor 0.15, gain ×4, and the
+bright-texel term (sun-worn rock) strengthened and de-gated from
+up-facing so cliff facets carry the glints. Sheen 0 -> 1 now visibly adds
+sun-catching sparkle on bright facets and slickrock rims.
+
+**Residual floor seam (user: "still slightly visible; gone at bump 0, so
+it's a bump problem").** Correct read — the last seam was the
+triMirrorSign parity correction itself: a HARD sign flip at every
+MirroredRepeat tile boundary (~4.5 wu grid), while the sampled normal
+content underneath is linear/mip/aniso-FILTERED across that same
+boundary. In the hairline band where filtered content and flipped sign
+disagree, the tangent vector points the wrong way — a one-texel-ish
+lighting crease that scales with bump and ignores layer crisp (heights
+are scalar, no sign, hence immune). Fix: derivative-aware sign — the
+parity ramps through zero over a fwidth-scaled band around each mirror
+line, so bump fades out for a hair's width instead of flipping across
+filtered texels. Verified at bump 1.5 on open sand: clean.
+
+**Angle-corrected normal blending (user suggested UE's
+BlendAngleCorrectedNormals).** Adopted — it's Reoriented Normal Mapping,
+and the triplanar variant (Golus) is strictly better than our UDN
+xy-add: per projection plane, the MESH normal (swizzled into that
+plane's tangent frame) is the RNM base and the sampled map is reoriented
+onto it, then the three results are swizzled back and weight-blended.
+Wins over UDN: detail keeps its shape at grazing angles instead of
+washing out (UDN's added xy is crushed by normalize when the base is
+steep), and RNM is an exact identity at bump 0 — the flat-shading facets
+pass through untouched by construction, where UDN only preserved them
+approximately. Bump strength scales the sampled tangent xy BEFORE
+reorienting; the legacy gate rides in the same scale (strength 0 ⇒
+identity ⇒ legacy emboss applies to the raw mesh normal as before).
+`triRnm()` guards its division by construction (base.z arrives as
+abs(axis)+1 ≥ 1). Decor shares the path via the same shader factory.
+Verified: floor at bump 1.5 seam-free and unchanged in character; mesa
+tops/strata read crisper on slopes.
+
+**Mirror tiling off by default (user: "might be problematic — at least
+provide a toggle").** Fair — MirroredRepeat caused two real bugs (per-
+tile normal handedness inversion, then the hairline sign-step seams) for
+one benefit (hiding hard tile edges), and the anti-tiling dual tap
+already masks those edges. Now: plain RepeatWrapping by default,
+`mirror tiling` checkbox in Render tweaks. All tiled textures (albedos +
+async-baked normal/height packs) register with terrainMaterial's
+`registerTiledTexture`, and `setMirrorTiling` flips wrap + re-uploads at
+runtime; the shader-side handedness correction is gated by the matching
+uTriMirror uniform (mix inside triMirrorSign — no recompile, and the two
+MUST agree or relief polarity alternates per tile). A/B verified at bump
+1.2: repeat mode shows no visible tile edges on floors or mesa tops.
 
 User: the existing terrace tweaks are "very minimalistic" — wants a real
 stepped/benched canyon-wall look. Two coordinated changes:

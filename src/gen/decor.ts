@@ -17,6 +17,14 @@ export interface DecorResult {
 export interface DecorDetail {
   rock: THREE.Texture;
   uniforms: DetailUniforms;
+  /** baked rock normal map (shared IUniform trio) — keeps decor bump in
+   * sync with the terrain's real normal mapping instead of the old
+   * screen-space emboss */
+  normalMaps?: {
+    side: THREE.IUniform<THREE.Texture>;
+    top: THREE.IUniform<THREE.Texture>;
+    mesa: THREE.IUniform<THREE.Texture>;
+  };
 }
 
 const ROCK_TONES = [0xa8542c, 0x96482a, 0xb56336, 0x8a4224, 0xc07444];
@@ -51,6 +59,7 @@ export function buildDecor(
           sandContact: mat.userData.sandContact
             ? { color: SAND_CONTACT, range: [0.1, 0.6] }
             : undefined,
+          normalMaps: detail.normalMaps,
         });
       }
     });

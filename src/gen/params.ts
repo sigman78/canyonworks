@@ -103,8 +103,25 @@ export interface RenderOptions {
   texContrast: number;
   /** texture hue bleed into the vertex palette (0 = pure luminance) */
   texHue: number;
+  /** texture own-color blend: 0 = tint over palette, 1 = texture albedo */
+  texAlbedo: number;
+  /** pre-v0.16 shading (emboss bump, no normal maps/albedo) for A/B */
+  legacyShading: boolean;
+  /** tri-planar blend sharpness (pow exponent; classic = 4) */
+  texBlendPow: number;
+  /** noise displacement of the projection transition boundary, 0..1 */
+  texBlendNoise: number;
+  /** world-space frequency of the blend noise */
+  texBlendNoiseScale: number;
+  /** height-priority layer transitions: 0 = linear fade, 1 = crisp */
+  texLayerCrisp: number;
   /** very-low-frequency macro tonal patchiness */
   texMacro: number;
+  /**
+   * tile detail textures with MirroredRepeat instead of plain Repeat —
+   * hides hard tile edges but needs per-tile normal handedness flips
+   */
+  texMirrorTile: boolean;
   /** baked ambient-occlusion strength (0 = off) */
   aoAmount: number;
   /** sun horizontal angle, degrees */
@@ -196,7 +213,9 @@ export function defaultRenderOptions(): RenderOptions {
   return {
     showGrid: true,
     showPassability: false,
-    flatShading: true,
+    // smooth for the new shading path; the legacy toggle flips this to
+    // flat (the classic look) and back — still manually overridable
+    flatShading: false,
     showDecor: true,
     wireframe: false,
     showTexMasks: false,
@@ -207,7 +226,14 @@ export function defaultRenderOptions(): RenderOptions {
     texRough: 0.5,
     texContrast: 1,
     texHue: 0.3,
+    texAlbedo: 0.3,
+    legacyShading: false,
+    texBlendPow: 4,
+    texBlendNoise: 0.35,
+    texBlendNoiseScale: 0.85,
+    texLayerCrisp: 0.6,
     texMacro: 0.3,
+    texMirrorTile: false,
     aoAmount: 0.65,
     sunAzimuth: -57,
     sunElevation: 45,

@@ -14,7 +14,7 @@ import type { GenParams } from './params';
  * implementation.
  */
 
-type WasmModule = typeof import('../../wasm/pkg/canyonworks_wasm');
+type WasmModule = typeof import('@wasm');
 
 let wasmModule: WasmModule | null = null;
 let initPromise: Promise<void> | null = null;
@@ -28,7 +28,7 @@ let modPromise: Promise<WasmModule> | null = null;
  */
 export async function wasmGen(): Promise<WasmModule> {
   if (!modPromise) {
-    modPromise = import('../../wasm/pkg/canyonworks_wasm').then(async (m) => {
+    modPromise = import('@wasm').then(async (m) => {
       await m.default();
       return m;
     });

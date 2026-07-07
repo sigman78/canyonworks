@@ -7,22 +7,24 @@ import { signedDistance } from '../gen/sdf2d';
 import { surfaceNets } from '../gen/surfacenets';
 import { buildDensityVolume } from '../gen/volume';
 import {
-  buildVolume,
   initWasmGen,
-  tryWasmColorize,
   tryWasmFieldsProfile,
+  tryWasmGenerateMesh,
   tryWasmSignedDistance,
 } from '../gen/volumeWasm';
 
 /**
- * WASM generator kernels (wasm/ crate, built by `npm run wasm:build`).
+ * WASM generator harnesses (wasm/ crate, built by `npm run wasm:build`).
  *
- * Stage 1: deterministic noise kit + parity/bench harness. The wasm
- * NoiseKit mirrors makeNoise()'s seeding, and the Rust port is meant to
- * be bit-compatible with the JS simplex-noise — `parity()` verifies
- * that; `bench()` times the same fbm3 grid fill in both worlds.
+ * - `parity()` / `bench()`: the noise kit — nearness to the JS simplex-noise
+ *   (the wasm noise runs f32 since Gate 5) and a like-for-like fbm3
+ *   grid-fill timing.
+ * - `meshCompare()`: the fused `generate_mesh` chain vs the pure-JS chain
+ *   on the running app's map, per-buffer diff report.
+ * - `fieldsParity()`: the two still-per-stage fields kernels.
+ * - `pipelineBench()`: whole-regenerate stage timings, wasm off vs on.
  *
- * Usage (dev console / Playwright): `await __cwWasm.bench(1337)`
+ * Usage (dev console / Playwright): `await __cwWasm.meshCompare()`
  */
 
 type WasmModule = typeof import('../../wasm/pkg/canyonworks_wasm');
@@ -113,25 +115,51 @@ export async function bench(
   };
 }
 
+/** per-buffer diff report entry of meshCompare() */
+interface BufferDiff {
+  /** JS-reference buffer length (elements) */
+  jsLen: number;
+  /** wasm buffer length (elements) — may differ from jsLen (see meshCompare doc) */
+  wasmLen: number;
+  /** element-wise a[i] !== b[i] count over the overlapping prefix */
+  mismatches: number;
+  maxAbsDiff: number;
+}
+
 /**
- * Volume-fill parity/bench: rebuilds the density volume both ways (JS
- * `buildDensityVolume` vs the wasm `fill_volume` path + carve-op post-pass
- * in `gen/volumeWasm.ts`) against the currently-running app's map, and
- * diffs the results. Bit-identical is expected (maxDiff 0 / diffCount 0);
- * a handful of diffs confined to wash columns is acceptable (see the ABI
- * spec's hypot-ULP note) but must be reported, not hidden.
+ * Whole-chain mesh comparison: runs the full pure-JS chain
+ * (buildDensityVolume + surfaceNets + THREE computeVertexNormals +
+ * computeAoJs + colorizeJs — exactly the mesher's fallback path) and the
+ * fused wasm generate_mesh (tryWasmGenerateMesh) on the SAME
+ * fields/params/ops from the running app, and reports per-buffer
+ * { jsLen, wasmLen, mismatches, maxAbsDiff }.
  *
- * Usage (dev console / Playwright): `await __cwWasm.volParity()`
+ * Expected (Gate 5+): the JS chain is the f64 REFERENCE and the wasm kernels
+ * run f32, so this is a nearness report, not a parity gate. Vertex/index
+ * counts should agree within ~0.1% (an f32 density can flip a marginal
+ * surface crossing, which shifts every buffer after it); when counts match,
+ * maxAbsDiff should be small (budgets: positions <= 1e-2 world units,
+ * normals <= 2e-2, ao/colors/facies <= 1e-2). 0 mismatches only happens when
+ * both paths compute identical fields with identical math — true in the
+ * all-f64 Gate 1-4 era, not since the f32 pass. `mismatches` covers the
+ * overlapping prefix; a count drift shows up as jsLen !== wasmLen.
+ *
+ * Usage (dev console / Playwright): `await __cwWasm.meshCompare()`
  */
-export async function volParity(): Promise<{
-  maxDiff: number;
-  diffCount: number;
-  blocksDiff: number;
-  jsMs: number;
-  wasmMs: number;
-  voxels: number;
+export async function meshCompare(): Promise<{
+  verts: number;
+  positions: BufferDiff;
+  indices: BufferDiff;
+  normals: BufferDiff;
+  ao: BufferDiff;
+  colors: BufferDiff;
+  facies: BufferDiff;
 }> {
   await initWasmGen();
+  // dynamic import: gen/volumeWasm imports this module, and gen/mesher
+  // imports gen/volumeWasm — a static mesher import here would close the
+  // cycle in the static graph
+  const { computeAoJs, colorizeJs, paletteSpec } = await import('../gen/mesher');
   // the running app instance (main.ts dev hook); fields/params/noise/grid
   // are private on App but reachable here through `any`
   const app = (window as unknown as { __cw?: unknown }).__cw as
@@ -142,173 +170,19 @@ export async function volParity(): Promise<{
         noise: Parameters<typeof placeCarveOps>[3];
       }
     | undefined;
-  if (!app) throw new Error('[wasm-vol] window.__cw not found — run inside the app');
+  if (!app) throw new Error('[wasm-mesh] window.__cw not found — run inside the app');
   const { grid, fields, params, noise } = app;
   const ops = placeCarveOps(grid, fields, params, noise);
 
-  const t0 = performance.now();
-  const js = buildDensityVolume(fields, params, noise, ops);
-  const jsMs = performance.now() - t0;
-
-  const t1 = performance.now();
-  const wasm = buildVolume(fields, { ...params, wasmGen: true }, noise, ops);
-  const wasmMs = performance.now() - t1;
-
-  let maxDiff = 0;
-  let diffCount = 0;
-  const n = Math.min(js.data.length, wasm.data.length);
-  for (let i = 0; i < n; i++) {
-    const d = Math.abs(js.data[i] - wasm.data[i]);
-    if (d > 1e-6) {
-      diffCount++;
-      if (d > maxDiff) maxDiff = d;
-    }
-  }
-
-  let blocksDiff = 0;
-  const nb = Math.min(js.blockType.length, wasm.blockType.length);
-  for (let i = 0; i < nb; i++) {
-    if (js.blockType[i] !== wasm.blockType[i]) blocksDiff++;
-  }
-
-  return {
-    maxDiff,
-    diffCount,
-    blocksDiff,
-    jsMs: Math.round(jsMs * 10) / 10,
-    wasmMs: Math.round(wasmMs * 10) / 10,
-    voxels: n,
-  };
-}
-
-/**
- * Surface-nets parity/bench: builds the FINAL density volume ONCE via the
- * pure-JS path (buildDensityVolume, carve ops included), then meshes that
- * SAME data/blockType with the JS surfaceNets and the wasm surface_nets and
- * byte-compares the streams. Both are expected exactly equal — positions
- * element-by-element on the Float32Array (the wasm builds in f64 and rounds
- * to f32 at the end, just like the JS number[] -> Float32Array), indices
- * element-by-element.
- *
- * Usage (dev console / Playwright): `await __cwWasm.netsParity()`
- */
-export async function netsParity(): Promise<{
-  vertsJs: number;
-  vertsWasm: number;
-  posDiffCount: number;
-  idxDiffCount: number;
-  jsMs: number;
-  wasmMs: number;
-}> {
-  await initWasmGen();
-  const wasm = await wasmGen();
-  const app = (window as unknown as { __cw?: unknown }).__cw as
-    | {
-        grid: Parameters<typeof placeCarveOps>[0];
-        fields: Parameters<typeof placeCarveOps>[1];
-        params: Parameters<typeof placeCarveOps>[2];
-        noise: Parameters<typeof placeCarveOps>[3];
-      }
-    | undefined;
-  if (!app) throw new Error('[wasm-nets] window.__cw not found — run inside the app');
-  const { grid, fields, params, noise } = app;
-  const ops = placeCarveOps(grid, fields, params, noise);
-  const vol = buildDensityVolume(fields, params, noise, ops);
-
-  const t0 = performance.now();
-  const js = surfaceNets(vol.data, vol.nx, vol.ny, vol.nz, vol.voxel, vol.originX, 0, vol.originZ, vol);
-  const jsMs = performance.now() - t0;
-
-  const t1 = performance.now();
-  // .d.ts may lag surface_nets — cast through `any`, same as fill_volume
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const res = (wasm as any).surface_nets(
-    vol.data,
-    vol.blockType,
-    vol.nx >>> 0,
-    vol.ny >>> 0,
-    vol.nz >>> 0,
-    vol.voxel,
-    vol.originX,
-    0, // originY — same value the mesher passes
-    vol.originZ,
-    vol.nbx >>> 0,
-    vol.nby >>> 0,
-  );
-  const wasmPos = res.positions as Float32Array;
-  const wasmIdx = res.indices as Uint32Array;
-  const wasmMs = performance.now() - t1;
-
-  let posDiffCount = Math.abs(js.positions.length - wasmPos.length);
-  const np = Math.min(js.positions.length, wasmPos.length);
-  for (let i = 0; i < np; i++) {
-    if (js.positions[i] !== wasmPos[i]) posDiffCount++;
-  }
-
-  let idxDiffCount = Math.abs(js.indices.length - wasmIdx.length);
-  const ni = Math.min(js.indices.length, wasmIdx.length);
-  for (let i = 0; i < ni; i++) {
-    if (js.indices[i] !== wasmIdx[i]) idxDiffCount++;
-  }
-
-  return {
-    vertsJs: js.positions.length / 3,
-    vertsWasm: wasmPos.length / 3,
-    posDiffCount,
-    idxDiffCount,
-    jsMs: Math.round(jsMs * 10) / 10,
-    wasmMs: Math.round(wasmMs * 10) / 10,
-  };
-}
-
-/**
- * AO-bake parity/bench: rebuilds the pipeline up to normals ONCE via the
- * pure-JS path (buildDensityVolume + surfaceNets + THREE
- * computeVertexNormals), then bakes AO from those SAME inputs with the JS
- * computeAoJs and the wasm bake_ao and compares per element. NOT guaranteed
- * exactly zero: the JS normalizes ray directions with 3-arg Math.hypot,
- * the Rust with sqrt-of-sum-of-squares — a last-ULP direction difference
- * can flip a probe voxel at a Math.round boundary (see wasm/src/ao.rs).
- * Expected: near-zero exactDiffCount, tiny maxDiff.
- *
- * Usage (dev console / Playwright): `await __cwWasm.aoParity()`
- */
-export async function aoParity(): Promise<{
-  verts: number;
-  exactDiffCount: number;
-  maxDiff: number;
-  jsMs: number;
-  wasmMs: number;
-}> {
-  await initWasmGen();
-  const wasm = await wasmGen();
-  // dynamic import: gen/volumeWasm imports this module, and gen/mesher
-  // imports gen/volumeWasm — a static mesher import here would close the
-  // cycle in the static graph
-  const { computeAoJs } = await import('../gen/mesher');
-  const app = (window as unknown as { __cw?: unknown }).__cw as
-    | {
-        grid: Parameters<typeof placeCarveOps>[0];
-        fields: Parameters<typeof placeCarveOps>[1];
-        params: Parameters<typeof placeCarveOps>[2];
-        noise: Parameters<typeof placeCarveOps>[3];
-      }
-    | undefined;
-  if (!app) throw new Error('[wasm-ao] window.__cw not found — run inside the app');
-  const { grid, fields, params, noise } = app;
-  const ops = placeCarveOps(grid, fields, params, noise);
+  // JS reference chain — stage for stage the mesher's fallback path
   const vol = buildDensityVolume(fields, params, noise, ops);
   const nets = surfaceNets(vol.data, vol.nx, vol.ny, vol.nz, vol.voxel, vol.originX, 0, vol.originZ, vol);
-
-  // same normals as the mesher: THREE's computeVertexNormals on the JS mesh
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(nets.positions, 3));
   geometry.setIndex(new THREE.BufferAttribute(nets.indices, 1));
   geometry.computeVertexNormals();
   const normals = (geometry.getAttribute('normal') as THREE.BufferAttribute).array as Float32Array;
-
-  const t0 = performance.now();
-  const js = computeAoJs(
+  const ao = computeAoJs(
     nets.positions,
     normals,
     vol.data,
@@ -319,137 +193,34 @@ export async function aoParity(): Promise<{
     vol.originX,
     vol.originZ,
   );
-  const jsMs = performance.now() - t0;
+  const col = colorizeJs(nets.positions, normals, fields, params, noise, vol);
 
-  const t1 = performance.now();
-  // .d.ts may lag bake_ao — cast through `any`, same as fill_volume
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const wasmAo = (wasm as any).bake_ao(
-    nets.positions,
-    normals,
-    vol.data,
-    vol.nx >>> 0,
-    vol.ny >>> 0,
-    vol.nz >>> 0,
-    vol.voxel,
-    vol.originX,
-    vol.originZ,
-  ) as Float32Array;
-  const wasmMs = performance.now() - t1;
-
+  const wasm = tryWasmGenerateMesh(fields, { ...params, wasmGen: true }, ops, paletteSpec());
   geometry.dispose();
+  if (!wasm) throw new Error('[wasm-mesh] wasm module not ready');
 
-  let exactDiffCount = Math.abs(js.length - wasmAo.length);
-  let maxDiff = 0;
-  const n = Math.min(js.length, wasmAo.length);
-  for (let i = 0; i < n; i++) {
-    if (js[i] !== wasmAo[i]) {
-      exactDiffCount++;
-      const d = Math.abs(js[i] - wasmAo[i]);
-      if (d > maxDiff) maxDiff = d;
-    }
-  }
-
-  return {
-    verts: js.length,
-    exactDiffCount,
-    maxDiff,
-    jsMs: Math.round(jsMs * 10) / 10,
-    wasmMs: Math.round(wasmMs * 10) / 10,
-  };
-}
-
-/**
- * Colorize parity/bench: rebuilds the pipeline up to normals ONCE via the
- * pure-JS path (buildDensityVolume + surfaceNets + THREE
- * computeVertexNormals), then colorizes those SAME inputs with the JS
- * colorizeJs and the wasm colorize (via tryWasmColorize, so the exact
- * production flattening runs) and compares both output arrays per element.
- * NOT guaranteed exactly zero: the strata-band jitter uses Math.sin and the
- * crater-crest / crack-lip gaussians use Math.exp — V8 transcendentals vs
- * Rust libm can differ by ~1 ULP (see wasm/src/colorize.rs). Expected:
- * exactDiffCount may be nonzero, but maxDiff < 1e-6; everything else
- * (bilinear samplers, smoothsteps, noise, lerps) is exact-order IEEE.
- *
- * Usage (dev console / Playwright): `await __cwWasm.colorParity()`
- */
-export async function colorParity(): Promise<{
-  verts: number;
-  colorExactDiff: number;
-  colorMaxDiff: number;
-  faciesExactDiff: number;
-  faciesMaxDiff: number;
-  jsMs: number;
-  wasmMs: number;
-}> {
-  await initWasmGen();
-  // dynamic import: gen/volumeWasm imports this module, and gen/mesher
-  // imports gen/volumeWasm — a static mesher import here would close the
-  // cycle in the static graph
-  const { colorizeJs, flattenPalette } = await import('../gen/mesher');
-  const app = (window as unknown as { __cw?: unknown }).__cw as
-    | {
-        grid: Parameters<typeof placeCarveOps>[0];
-        fields: Parameters<typeof placeCarveOps>[1];
-        params: Parameters<typeof placeCarveOps>[2];
-        noise: Parameters<typeof placeCarveOps>[3];
-      }
-    | undefined;
-  if (!app) throw new Error('[wasm-color] window.__cw not found — run inside the app');
-  const { grid, fields, params, noise } = app;
-  const ops = placeCarveOps(grid, fields, params, noise);
-  const vol = buildDensityVolume(fields, params, noise, ops);
-  const nets = surfaceNets(vol.data, vol.nx, vol.ny, vol.nz, vol.voxel, vol.originX, 0, vol.originZ, vol);
-
-  // same normals as the mesher: THREE's computeVertexNormals on the JS mesh
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.BufferAttribute(nets.positions, 3));
-  geometry.setIndex(new THREE.BufferAttribute(nets.indices, 1));
-  geometry.computeVertexNormals();
-  const normals = (geometry.getAttribute('normal') as THREE.BufferAttribute).array as Float32Array;
-
-  const t0 = performance.now();
-  const js = colorizeJs(nets.positions, normals, fields, params, noise, vol);
-  const jsMs = performance.now() - t0;
-
-  const t1 = performance.now();
-  const wasm = tryWasmColorize(
-    nets.positions,
-    normals,
-    fields,
-    { ...params, wasmGen: true },
-    flattenPalette(),
-    vol,
-  );
-  const wasmMs = performance.now() - t1;
-  if (!wasm) throw new Error('[wasm-color] wasm module not ready');
-
-  geometry.dispose();
-
-  const compare = (a: Float32Array, b: Float32Array): { exact: number; max: number } => {
-    let exact = Math.abs(a.length - b.length);
-    let max = 0;
+  const compare = (a: Float32Array | Uint32Array, b: Float32Array | Uint32Array): BufferDiff => {
+    let mismatches = 0;
+    let maxAbsDiff = 0;
     const n = Math.min(a.length, b.length);
     for (let i = 0; i < n; i++) {
       if (a[i] !== b[i]) {
-        exact++;
+        mismatches++;
         const d = Math.abs(a[i] - b[i]);
-        if (d > max) max = d;
+        if (d > maxAbsDiff) maxAbsDiff = d;
       }
     }
-    return { exact, max };
+    return { jsLen: a.length, wasmLen: b.length, mismatches, maxAbsDiff };
   };
-  const color = compare(js.colors, wasm.colors);
-  const facies = compare(js.facies, wasm.facies);
 
   return {
     verts: nets.positions.length / 3,
-    colorExactDiff: color.exact,
-    colorMaxDiff: color.max,
-    faciesExactDiff: facies.exact,
-    faciesMaxDiff: facies.max,
-    jsMs: Math.round(jsMs * 10) / 10,
-    wasmMs: Math.round(wasmMs * 10) / 10,
+    positions: compare(nets.positions, wasm.positions),
+    indices: compare(nets.indices, wasm.indices),
+    normals: compare(normals, wasm.normals),
+    ao: compare(ao, wasm.ao),
+    colors: compare(col.colors, wasm.colors),
+    facies: compare(col.facies, wasm.facies),
   };
 }
 
@@ -461,16 +232,17 @@ export async function colorParity(): Promise<{
  *    (step 1, copied verbatim) and runs the JS signedDistance vs the wasm
  *    signed_distance on the SAME raster, comparing in CELL units — BEFORE
  *    the `* voxel` scaling that buildFields applies afterwards. Expected
- *    exactly zero (pure f64 EDT + IEEE sqrt).
+ *    exactly zero — the EDT is the one kernel still f64 (Gate-5 whitelist,
+ *    see wasm/src/fields.rs) and IEEE sqrt is exact.
  * 2. Ground profile: builds a reference Fields with wasmGen forced OFF
  *    (pure JS end to end), then re-runs the profile step on the SAME
  *    flattened inputs — buildFields keeps its intermediates (flattenW,
  *    flatRaw, mesaOff) on the returned Fields precisely for this — via the
  *    JS fieldsProfileJs (timed) and the wasm fields_profile (timed), and
- *    diffs groundH/wallMask/craterD/maxH against the reference. NOT
- *    guaranteed exactly zero: crater bowls/rims and talus use
- *    Math.cos/Math.exp (V8 vs libm ~1 ULP, see wasm/src/fields.rs).
- *    Expected: near-zero exactDiff counts, tiny maxDiff.
+ *    diffs groundH/wallMask/craterD/maxH against the reference. NOT a
+ *    parity gate since Gate 5: the wasm profile runs f32 against the f64 JS
+ *    reference, so expect LARGE exactDiff counts (most cells differ in the
+ *    low bits) with small maxDiff — nearness, not identity.
  *
  * Usage (dev console / Playwright): `await __cwWasm.fieldsParity()`
  */
@@ -604,8 +376,10 @@ export async function fieldsParity(): Promise<{
 /**
  * Per-stage JS-vs-WASM pipeline comparison: runs full regenerates with
  * wasmGen off, then on, averaging the call-site stage timings (core/perf)
- * across runs. Also prints a ready-to-read console.table. Stages that have
- * no wasm path yet (layout, fields, decor…) act as the
+ * across runs. Also prints a ready-to-read console.table. The mesh stages
+ * (volumeFill..colorize) compare the fused wasm generate_mesh against the
+ * JS chain; `fields` compares its wasm EDT + profile kernels against the JS
+ * ones. Only the stages with no wasm path yet (layout, decor…) act as the
  * control group — their deltas should be noise.
  */
 export async function pipelineBench(runs = 3): Promise<{

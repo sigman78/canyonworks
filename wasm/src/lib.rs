@@ -1,32 +1,53 @@
 //! CanyonWorks WASM generator kernels.
 //!
-//! Stage 1 (scaffold): the deterministic noise kit + a grid-fill bench
-//! kernel, exposed through wasm-bindgen with the SAME seeding scheme as
-//! core/noise.ts makeNoise(). Later stages move the volume fill, surface
-//! nets and AO bake here.
+//! The wasm boundary is a single fused `generate_mesh` call (pipeline.rs) —
+//! volume fill -> carve ops -> surface nets -> normals -> AO -> colorize in
+//! one crossing — plus the two still-per-stage fields exports
+//! (`signed_distance` / `fields_profile`) and the `NoiseKit` parity/bench
+//! harness. Everything else is the TYPED library face: public modules
+//! (params/grid/noise + one module per kernel) whose functions take
+//! `&GenParams` / `Grid2` / `VolDims` / `&MapNoise` — no positional f64
+//! vectors. Native benches (examples/, built with an explicit native
+//! `--target`) call these typed APIs directly; wasm-bindgen is just a
+//! wrapper.
 
-mod ao;
-mod colorize;
-mod fields;
-mod nets;
-mod noise;
-mod volume;
+pub mod ao;
+pub mod colorize;
+pub mod fields;
+pub mod grid;
+pub mod math;
+pub mod nets;
+pub mod noise;
+pub mod normals;
+pub mod ops;
+mod par;
+pub mod params;
+pub mod pipeline;
+pub mod timer;
+pub mod volume;
 
-pub use ao::bake_ao;
-pub use colorize::{colorize, ColorizeResult};
 pub use fields::{fields_profile, signed_distance, FieldsProfileResult};
-pub use nets::{surface_nets, NetsResult};
-pub use volume::{fill_volume, VolumeResult};
+pub use pipeline::{generate_mesh, MeshResult};
 
-use noise::{fbm2, fbm3, ridged2, Noise2, Noise3};
+use grid::MapNoise;
+use math::{vec2, vec3};
+use noise::fbm3;
 use wasm_bindgen::prelude::*;
 
-/// Mirror of core/noise.ts `NoiseKit` — same seed derivation
-/// (`seed ^ 0x2f6e2b1` / `seed ^ 0x5b7e4d3`), same output values.
+/// Parity/bench harness face over the map's shared noise (core/noise.ts
+/// `NoiseKit`, pruned to the methods the TS harness in src/core/wasmGen.ts
+/// actually calls: `noise2`/`noise3` samples + the `fill_fbm3` bench
+/// kernel). Delegates to `grid::MapNoise`, the ONE home for the makeNoise
+/// seed derivation (`seed ^ 0x2f6e2b1` / `seed ^ 0x5b7e4d3`), so the harness
+/// provably samples the same fields as every kernel stage. The JS-number
+/// boundary stays f64 in/out; args narrow to f32 AND repack into the
+/// compound `Vec2`/`Vec3` sample points ONCE at entry (Gate-5 whitelist
+/// item 4 + the Gate-7 fringe rule — scalars live only here, at the
+/// #[wasm_bindgen] surface). Kernel noise math is f32, so the TS parity
+/// harness measures nearness to the JS noise, not bit-identity.
 #[wasm_bindgen]
 pub struct NoiseKit {
-    n2: Noise2,
-    n3: Noise3,
+    noise: MapNoise,
 }
 
 #[wasm_bindgen]
@@ -34,29 +55,16 @@ impl NoiseKit {
     #[wasm_bindgen(constructor)]
     pub fn new(seed: u32) -> NoiseKit {
         NoiseKit {
-            n2: Noise2::new(seed ^ 0x2f6_e2b1),
-            n3: Noise3::new(seed ^ 0x5b7_e4d3),
+            noise: MapNoise::new(seed),
         }
     }
 
     pub fn noise2(&self, x: f64, y: f64) -> f64 {
-        self.n2.sample(x, y)
+        self.noise.n2.sample(vec2(x as f32, y as f32)) as f64
     }
 
     pub fn noise3(&self, x: f64, y: f64, z: f64) -> f64 {
-        self.n3.sample(x, y, z)
-    }
-
-    pub fn fbm2(&self, x: f64, y: f64, octaves: u32) -> f64 {
-        fbm2(&self.n2, x, y, octaves)
-    }
-
-    pub fn fbm3(&self, x: f64, y: f64, z: f64, octaves: u32) -> f64 {
-        fbm3(&self.n3, x, y, z, octaves)
-    }
-
-    pub fn ridged2(&self, x: f64, y: f64, octaves: u32) -> f64 {
-        ridged2(&self.n2, x, y, octaves)
+        self.noise.n3.sample(vec3(x as f32, y as f32, z as f32)) as f64
     }
 
     /// Bench/parity kernel: fill an nx×ny×nz grid with fbm3 sampled at
@@ -65,15 +73,19 @@ impl NoiseKit {
     /// Float32Array (copy across the boundary; the real volume port will
     /// expose views into wasm memory instead).
     pub fn fill_fbm3(&self, nx: u32, ny: u32, nz: u32, voxel: f64, freq: f64, octaves: u32) -> Vec<f32> {
+        // f64 JS scalars -> f32 once at entry (Gate-5 whitelist item 4)
+        let (voxel, freq) = (voxel as f32, freq as f32);
         let mut out = vec![0.0f32; (nx * ny * nz) as usize];
         let mut idx = 0;
+        // per-lane coordinates hoisted per loop level (unchanged), composed
+        // into the compound sample point where the innermost lane lands
         for iz in 0..nz {
-            let z = iz as f64 * voxel * freq;
+            let z = iz as f32 * voxel * freq;
             for iy in 0..ny {
-                let y = iy as f64 * voxel * freq;
+                let y = iy as f32 * voxel * freq;
                 for ix in 0..nx {
-                    let x = ix as f64 * voxel * freq;
-                    out[idx] = fbm3(&self.n3, x, y, z, octaves) as f32;
+                    let x = ix as f32 * voxel * freq;
+                    out[idx] = fbm3(&self.noise.n3, vec3(x, y, z), octaves);
                     idx += 1;
                 }
             }

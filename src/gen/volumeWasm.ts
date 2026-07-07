@@ -1,18 +1,18 @@
-import type { NoiseKit } from '../core/noise';
 import { wasmGen } from '../core/wasmGen';
 import type { CarveOp } from './carves';
 import type { Crater, Fields } from './fields';
 import type { GenParams } from './params';
-import { surfaceNets, type NetsResult } from './surfacenets';
-import { BLOCK, buildDensityVolume, type DensityVolume } from './volume';
 
 /**
- * WASM dispatch for the volume-fill kernel (stage 2). `fill_volume` (Rust,
- * `wasm/src/volume.rs`) does everything buildDensityVolume() does EXCEPT
- * carve-op SDF evaluation — op.sdf closures are JS-only, so after the wasm
- * fill returns we replay the carve-op post-pass here, exactly matching the
- * per-block op lists + fill-loop order in `./volume` (lines ~240-259 and the
- * MIXED-block fill loop) so results are byte-identical to the JS path.
+ * WASM dispatch for the generator. The mesh chain is ONE fused call
+ * (`tryWasmGenerateMesh` -> Rust `generate_mesh`): volume fill -> carve ops
+ * -> surface nets -> normals -> AO -> colorize all run wasm-side, so the
+ * ~4MB density volume never crosses the JS/wasm boundary. The two fields
+ * kernels (`tryWasmSignedDistance` / `tryWasmFieldsProfile`) stay per-stage
+ * until layout/fields-glue moves in-crate (Stage B). Every dispatcher
+ * returns null when `params.wasmGen === false`, the module isn't loaded, or
+ * the wasm call throws (logged) — the CALLER falls back to the pure-JS
+ * implementation.
  */
 
 type WasmModule = Awaited<ReturnType<typeof wasmGen>>;
@@ -35,169 +35,139 @@ export function initWasmGen(): Promise<void> {
 }
 
 /**
- * Synchronous dispatcher: uses the wasm fill when `params.wasmGen !== false`
- * AND the module has finished loading (cached in `wasmModule` once its
- * promise resolves), otherwise falls back to the JS `buildDensityVolume`.
+ * The pure-JS density fill IS the `wasmGen: false` fallback — re-exported
+ * under its historical dispatcher name for callers that predate the fused
+ * pipeline (the wasm fill is only reachable through generate_mesh now).
  */
-export function buildVolume(
-  fields: Fields,
-  params: GenParams,
-  noise: NoiseKit,
-  ops: readonly CarveOp[] = [],
-  forceAllMixed = false,
-): DensityVolume {
-  const useWasm = params.wasmGen !== false && wasmModule !== null;
-  const t0 = performance.now();
-  const vol = useWasm
-    ? buildVolumeWasm(wasmModule as WasmModule, fields, params, ops, forceAllMixed)
-    : buildDensityVolume(fields, params, noise, ops, forceAllMixed);
-  const ms = performance.now() - t0;
-  console.debug(`[wasm-vol] fill ${ms.toFixed(1)}ms (${useWasm ? 'wasm' : 'js fallback'})`);
-  return vol;
+export { buildDensityVolume as buildVolume } from './volume';
+
+/** plain linear-space color triple (a THREE.Color snapshot: {r, g, b}) */
+export interface Rgb {
+  r: number;
+  g: number;
+  b: number;
 }
 
 /**
- * Surface-nets dispatcher (stage 3): meshes the FINAL volume data (the
- * carve-op post-pass has already been applied by buildVolume above). The
- * wasm `surface_nets` (wasm/src/nets.rs) always runs with block info —
- * vol.blockType is always present — and its visit order matches the JS
- * surfaceNets exactly, so the streams are byte-identical. originY is 0,
- * the same value the mesher passed to the JS surfaceNets.
+ * Per-call snapshot of the mesher's TERRAIN_PALETTE, serde-decoded by
+ * wasm/src/params.rs `Palette`. Built by the CALLER (mesher.ts
+ * `paletteSpec()` — the palette is local to the mesher, and this module
+ * must never import the mesher: import cycle) and rebuilt per call, never
+ * cached: the Palette panel mutates the live THREE.Color objects between
+ * regenerates.
  */
-export function buildNets(vol: DensityVolume, params: GenParams): NetsResult {
-  const useWasm = params.wasmGen !== false && wasmModule !== null;
+export interface PaletteSpec {
+  /** cliff strata bands, bottom to top (5 entries) */
+  strata: Rgb[];
+  floorA: Rgb;
+  floorB: Rgb;
+  cap: Rgb;
+  crevice: Rgb;
+  craterIn: Rgb;
+  craterWall: Rgb;
+  craterRim: Rgb;
+  ejecta: Rgb;
+  crackDeep: Rgb;
+  crackLip: Rgb;
+}
+
+/** result of the fused wasm `generate_mesh` — final mesh buffers + stats */
+export interface WasmMesh {
+  positions: Float32Array;
+  indices: Uint32Array;
+  normals: Float32Array;
+  ao: Float32Array;
+  colors: Float32Array;
+  facies: Float32Array;
+  nbx: number;
+  nby: number;
+  nbz: number;
+  mixedCount: number;
+  solidCount: number;
+  /** [volumeFill(+carve ops), surfaceNets, normals, aoBake, colorize] ms */
+  stageMs: number[];
+}
+
+/**
+ * Fused whole-chain dispatcher: ONE wasm call runs volume fill -> carve ops
+ * -> surface nets -> normals -> AO -> colorize, so the ~4MB density volume
+ * never crosses the JS/wasm boundary — only the five small 2D field rasters
+ * go in and the final mesh buffers come out. Returns null when
+ * `params.wasmGen === false`, the module hasn't finished loading, or the
+ * wasm call throws (serde error etc — logged, then the CALLER falls back to
+ * the full JS chain in ./mesher). Ops are serialized from their `shape`
+ * payloads (carves.ts CarveShapeSpec — the sdf closures never cross the
+ * boundary); params go over as the live object (serde ignores unknown
+ * fields, defaults missing ones).
+ */
+export function tryWasmGenerateMesh(
+  fields: Fields,
+  params: GenParams,
+  ops: readonly CarveOp[],
+  palette: PaletteSpec,
+): WasmMesh | null {
+  const mod = wasmModule;
+  if (params.wasmGen === false || mod === null) return null;
   const t0 = performance.now();
-  let nets: NetsResult;
-  if (useWasm) {
-    // generated .d.ts may lag surface_nets/NetsResult — cast through `any`
-    // at this one call, same pattern as fill_volume above
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const res = (wasmModule as any).surface_nets(
-      vol.data,
-      vol.blockType,
-      vol.nx >>> 0,
-      vol.ny >>> 0,
-      vol.nz >>> 0,
-      vol.voxel,
-      vol.originX,
-      0, // originY
-      vol.originZ,
-      vol.nbx >>> 0,
-      vol.nby >>> 0,
+  try {
+    const opSpecs = ops.map((o) => ({
+      kind: o.kind,
+      minX: o.minX,
+      maxX: o.maxX,
+      minY: o.minY,
+      maxY: o.maxY,
+      minZ: o.minZ,
+      maxZ: o.maxZ,
+      shape: o.shape,
+    }));
+    const res = mod.generate_mesh(
+      fields.groundH,
+      fields.wallMask,
+      fields.s2,
+      fields.crackD,
+      fields.craterD,
+      fields.nx >>> 0,
+      fields.nz >>> 0,
+      fields.voxel,
+      fields.originX,
+      fields.originZ,
+      fields.maxH,
+      opSpecs,
+      params,
+      palette,
+      false, // forceAllMixed
     );
-    nets = {
-      positions: res.positions as Float32Array,
-      indices: res.indices as Uint32Array,
+    const out: WasmMesh = {
+      positions: res.positions,
+      indices: res.indices,
+      normals: res.normals,
+      ao: res.ao,
+      colors: res.colors,
+      facies: res.facies,
+      nbx: res.nbx,
+      nby: res.nby,
+      nbz: res.nbz,
+      mixedCount: res.mixed_count,
+      solidCount: res.solid_count,
+      stageMs: Array.from(res.stage_ms),
     };
-  } else {
-    nets = surfaceNets(vol.data, vol.nx, vol.ny, vol.nz, vol.voxel, vol.originX, 0, vol.originZ, vol);
+    res.free(); // getters copied out; drop the wasm-side buffers now
+    console.debug(`[wasm-mesh] generate_mesh ${(performance.now() - t0).toFixed(1)}ms (wasm)`);
+    return out;
+  } catch (err) {
+    console.error('[wasm-mesh] generate_mesh failed, falling back to the JS chain', err);
+    return null;
   }
-  const ms = performance.now() - t0;
-  console.debug(`[wasm-nets] mesh ${ms.toFixed(1)}ms (${useWasm ? 'wasm' : 'js fallback'})`);
-  return nets;
 }
 
 /**
- * AO-bake dispatcher (stage 4): wasm attempt only — returns null when
- * `params.wasmGen === false` or the module hasn't finished loading, and the
- * CALLER falls back to the pure-JS computeAoJs in ./mesher (the fallback
- * lives there, not here, so this module never imports the mesher — that
- * would be an import cycle). The JS path is timed by the mesher's aoBake
- * perf mark; only the wasm path logs here.
- */
-export function tryWasmAo(
-  positions: Float32Array,
-  normals: Float32Array,
-  data: Float32Array,
-  nx: number,
-  ny: number,
-  nz: number,
-  voxel: number,
-  originX: number,
-  originZ: number,
-  params: GenParams,
-): Float32Array | null {
-  if (params.wasmGen === false || wasmModule === null) return null;
-  const t0 = performance.now();
-  // generated .d.ts may lag bake_ao — cast through `any` at this one call,
-  // same pattern as fill_volume/surface_nets above
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const ao = (wasmModule as any).bake_ao(
-    positions,
-    normals,
-    data,
-    nx >>> 0,
-    ny >>> 0,
-    nz >>> 0,
-    voxel,
-    originX,
-    originZ,
-  ) as Float32Array;
-  console.debug(`[wasm-ao] bake ${(performance.now() - t0).toFixed(1)}ms (wasm)`);
-  return ao;
-}
-
-/**
- * Colorize dispatcher (stage 5): wasm attempt only — returns null when
- * `params.wasmGen === false` or the module hasn't finished loading, and the
- * CALLER falls back to the pure-JS colorizeJs in ./mesher (the fallback
- * lives there, not here, so this module never imports the mesher — that
- * would be an import cycle; for the same reason the 45-value palette is
- * flattened AT the call site from TERRAIN_PALETTE, which is local to the
- * mesher, and handed in here). The JS path is timed by the mesher's
- * colorize perf mark; only the wasm path logs here.
- */
-export function tryWasmColorize(
-  positions: Float32Array,
-  normals: Float32Array,
-  fields: Fields,
-  params: GenParams,
-  palette: Float64Array,
-  vol: DensityVolume,
-): { colors: Float32Array; facies: Float32Array } | null {
-  if (params.wasmGen === false || wasmModule === null) return null;
-  const t0 = performance.now();
-  // generated .d.ts may lag colorize — cast through `any` at this one call,
-  // same pattern as fill_volume/surface_nets/bake_ao above
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const res = (wasmModule as any).colorize(
-    positions,
-    normals,
-    vol.data,
-    vol.nx >>> 0,
-    vol.ny >>> 0,
-    vol.nz >>> 0,
-    vol.voxel,
-    vol.originX,
-    vol.originZ,
-    fields.nx >>> 0,
-    fields.nz >>> 0,
-    fields.voxel,
-    fields.originX,
-    fields.originZ,
-    fields.groundH,
-    fields.s2,
-    fields.crackD,
-    fields.craterD,
-    flattenColorParams(params),
-    palette,
-    params.seed >>> 0,
-  );
-  const out = {
-    colors: res.colors as Float32Array,
-    facies: res.facies as Float32Array,
-  };
-  console.debug(`[wasm-color] ${(performance.now() - t0).toFixed(1)}ms (wasm)`);
-  return out;
-}
-
-/**
- * Signed-distance dispatcher (stage 6a): wasm attempt only — returns null
- * when `params.wasmGen === false` or the module hasn't finished loading, and
- * the CALLER (buildFields step 2 in ./fields) falls back to the pure-JS
+ * Signed-distance dispatcher (fields stage): wasm attempt only — returns
+ * null when `params.wasmGen === false`, the module hasn't finished loading,
+ * or the wasm call throws (a Rust assert panics as a JS exception — logged),
+ * and the CALLER (buildFields step 2 in ./fields) falls back to the pure-JS
  * signedDistance in ./sdf2d. Returns CELL units exactly like sdf2d.ts — the
  * `* voxel` world-unit scaling stays in buildFields. Expected bit-identical
- * to the JS (pure f64 EDT, IEEE sqrt).
+ * to the JS (the EDT stays f64 per the Gate-5 whitelist; IEEE sqrt).
  */
 export function tryWasmSignedDistance(
   openRaster: Uint8Array,
@@ -205,25 +175,30 @@ export function tryWasmSignedDistance(
   nz: number,
   params: GenParams,
 ): Float32Array | null {
-  if (params.wasmGen === false || wasmModule === null) return null;
+  const mod = wasmModule;
+  if (params.wasmGen === false || mod === null) return null;
   const t0 = performance.now();
-  // generated .d.ts may lag signed_distance — cast through `any` at this one
-  // call, same pattern as fill_volume/surface_nets/bake_ao/colorize above
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const out = (wasmModule as any).signed_distance(openRaster, nx >>> 0, nz >>> 0) as Float32Array;
-  console.debug(`[wasm-fields] sdf ${(performance.now() - t0).toFixed(1)}ms (wasm)`);
-  return out;
+  try {
+    const out = mod.signed_distance(openRaster, nx >>> 0, nz >>> 0);
+    console.debug(`[wasm-fields] sdf ${(performance.now() - t0).toFixed(1)}ms (wasm)`);
+    return out;
+  } catch (err) {
+    console.error('[wasm-fields] signed_distance failed, falling back to the JS EDT', err);
+    return null;
+  }
 }
 
 /**
- * Ground-profile dispatcher (stage 6b): wasm attempt only — returns null
- * when `params.wasmGen === false` or the module hasn't finished loading, and
- * the CALLER (buildFields step 7 in ./fields) falls back to the pure-JS
- * fieldsProfileJs there. `s2` must be ALREADY voxel-scaled (world units);
- * craters are flattened 4-stride [x, z, r, depth]. NOT guaranteed exactly
- * zero: the crater bowl/rim and talus math use Math.cos/Math.exp — V8 vs
- * libm may differ by ~1 ULP (see wasm/src/fields.rs). Expected parity:
- * near-or-exactly identical, tiny maxDiff.
+ * Ground-profile dispatcher (fields stage): wasm attempt only — returns null
+ * when `params.wasmGen === false`, the module hasn't finished loading, or
+ * the wasm call throws (serde error / Rust assert — logged), and the CALLER
+ * (buildFields step 7 in ./fields) falls back to the pure-JS fieldsProfileJs
+ * there. `s2` must be ALREADY voxel-scaled (world units); craters are
+ * flattened 4-stride [x, z, r, depth]; params go over as the live object
+ * (serde-decoded GenParams — seed derivation happens wasm-side).
+ * NOT parity-exact: the wasm profile runs f32 (Gate 5) against the f64 JS
+ * path — visually equivalent, not bitwise (see wasm/src/fields.rs; the
+ * fieldsParity harness in core/wasmGen.ts measures the nearness).
  */
 export function tryWasmFieldsProfile(
   nx: number,
@@ -239,236 +214,43 @@ export function tryWasmFieldsProfile(
   craters: readonly Crater[],
   params: GenParams,
 ): { groundH: Float32Array; wallMask: Float32Array; craterD: Float32Array; maxH: number } | null {
-  if (params.wasmGen === false || wasmModule === null) return null;
+  const mod = wasmModule;
+  if (params.wasmGen === false || mod === null) return null;
   const t0 = performance.now();
-  const cratersFlat = new Float64Array(craters.length * 4);
-  for (let i = 0; i < craters.length; i++) {
-    const c = craters[i];
-    cratersFlat[i * 4] = c.x;
-    cratersFlat[i * 4 + 1] = c.z;
-    cratersFlat[i * 4 + 2] = c.r;
-    cratersFlat[i * 4 + 3] = c.depth;
-  }
-  // generated .d.ts may lag fields_profile/FieldsProfileResult — cast
-  // through `any` at this one call, same pattern as the kernels above
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const res = (wasmModule as any).fields_profile(
-    nx >>> 0,
-    nz >>> 0,
-    voxel,
-    originX,
-    originZ,
-    s2,
-    crackD,
-    flattenW,
-    flatRaw,
-    mesaOff,
-    cratersFlat,
-    flattenFieldsParams(params),
-    params.seed >>> 0,
-  );
-  const out = {
-    groundH: res.ground_h as Float32Array,
-    wallMask: res.wall_mask as Float32Array,
-    craterD: res.crater_d as Float32Array,
-    maxH: res.max_h as number,
-  };
-  console.debug(`[wasm-fields] profile ${(performance.now() - t0).toFixed(1)}ms (wasm)`);
-  return out;
-}
-
-/**
- * FIELDS PARAMS vector order — MUST match wasm/src/fields.rs exactly:
- * [0] ridgeFreq, [1] ridgeAmp, [2] floorBase, [3] floorFreq, [4] floorAmp,
- * [5] talusAmp, [6] talusFall, [7] wallThickness, [8] wallHeight,
- * [9] wallFreq, [10] wallVar, [11] terraceStep, [12] terraceAmt,
- * [13] terraceSharp, [14] crackDepth.
- */
-export function flattenFieldsParams(params: GenParams): Float64Array {
-  return new Float64Array([
-    params.ridgeFreq, // 0
-    params.ridgeAmp, // 1
-    params.floorBase, // 2
-    params.floorFreq, // 3
-    params.floorAmp, // 4
-    params.talusAmp, // 5
-    params.talusFall, // 6
-    params.wallThickness, // 7
-    params.wallHeight, // 8
-    params.wallFreq, // 9
-    params.wallVar, // 10
-    params.terraceStep, // 11
-    params.terraceAmt, // 12
-    params.terraceSharp, // 13
-    params.crackDepth, // 14
-  ]);
-}
-
-/**
- * COLOR PARAMS vector order — MUST match wasm/src/colorize.rs exactly:
- * [0] terraceStep, [1] wallHeight, [2] wallVar.
- */
-export function flattenColorParams(params: GenParams): Float64Array {
-  return new Float64Array([
-    params.terraceStep, // 0
-    params.wallHeight, // 1
-    params.wallVar, // 2
-  ]);
-}
-
-/** PARAMS vector order — MUST match wasm/src/volume.rs exactly (see ABI spec). */
-function flattenParams(params: GenParams): Float64Array {
-  return new Float64Array([
-    params.wallNoiseAmp, // 0
-    params.wallNoiseFreq, // 1
-    params.ledgeAmp, // 2
-    params.terraceStep, // 3
-    params.floorBase, // 4
-    params.washAmp, // 5
-    params.washHeight, // 6
-    params.washCoverage, // 7
-    params.washScale, // 8
-  ]);
-}
-
-function flattenOpBounds(ops: readonly CarveOp[]): Float64Array {
-  const out = new Float64Array(ops.length * 6);
-  for (let i = 0; i < ops.length; i++) {
-    const op = ops[i];
-    const b = i * 6;
-    out[b] = op.minX;
-    out[b + 1] = op.maxX;
-    out[b + 2] = op.minY;
-    out[b + 3] = op.maxY;
-    out[b + 4] = op.minZ;
-    out[b + 5] = op.maxZ;
-  }
-  return out;
-}
-
-function buildVolumeWasm(
-  mod: WasmModule,
-  fields: Fields,
-  params: GenParams,
-  ops: readonly CarveOp[],
-  forceAllMixed: boolean,
-): DensityVolume {
-  const { nx, nz, voxel, originX, originZ, groundH, wallMask, s2 } = fields;
-  // same formula as volume.ts line ~72; precomputed here, NOT re-derived in Rust
-  const ny = Math.ceil((fields.maxH + 1.0) / voxel) + 1;
-
-  const paramsVec = flattenParams(params);
-  const opBounds = flattenOpBounds(ops);
-
-  // The generated wasm-bindgen .d.ts lags fill_volume/VolumeResult (the Rust
-  // side lands wasm/src/volume.rs in parallel with this file) — cast through
-  // `any` at this one call + its result access, per the ABI spec.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const result = (mod as any).fill_volume(
-    params.seed >>> 0,
-    nx >>> 0,
-    ny >>> 0,
-    nz >>> 0,
-    voxel,
-    originX,
-    originZ,
-    groundH,
-    wallMask,
-    s2,
-    paramsVec,
-    opBounds,
-    forceAllMixed,
-  );
-
-  const vol: DensityVolume = {
-    data: result.data as Float32Array,
-    nx,
-    ny,
-    nz,
-    voxel,
-    originX,
-    originZ,
-    blockType: result.block_type as Uint8Array,
-    nbx: result.nbx as number,
-    nby: result.nby as number,
-    nbz: result.nbz as number,
-    mixedCount: result.mixed_count as number,
-    solidCount: result.solid_count as number,
-  };
-
-  applyCarveOpsPostPass(vol, ops);
-  return vol;
-}
-
-/**
- * Carve-op post-pass: rebuild per-block op lists purely from op bounds
- * (identical math to volume.ts lines ~240-259 — block forcing to MIXED
- * already happened on the wasm side, so only the list-building matters
- * here), then apply the ops voxel-by-voxel over exactly those blocks' voxel
- * ranges, iz outer -> ix -> iy inner (same nested order as volume.ts's fill
- * loop, so per-voxel op application order is identical). Edge voxels
- * (ix/iz == 0 or n-1, iy == ny-1) are forced -1 air by the wasm fill and are
- * skipped BEFORE op evaluation, exactly like the JS `continue` — ops never
- * touch the closed diorama skirt.
- */
-function applyCarveOpsPostPass(vol: DensityVolume, ops: readonly CarveOp[]): void {
-  if (ops.length === 0) return;
-  const { data, nx, ny, nz, voxel, originX, originZ, nbx, nby, nbz } = vol;
-
-  const opLists = new Map<number, number[]>();
-  for (let oi = 0; oi < ops.length; oi++) {
-    const op = ops[oi];
-    const bx0 = Math.max(0, Math.ceil(((op.minX - originX) / voxel - BLOCK) / BLOCK));
-    const bx1 = Math.min(nbx - 1, Math.floor(((op.maxX - originX) / voxel + 1) / BLOCK));
-    const by0 = Math.max(0, Math.ceil((op.minY / voxel - BLOCK) / BLOCK));
-    const by1 = Math.min(nby - 1, Math.floor((op.maxY / voxel + 1) / BLOCK));
-    const bz0 = Math.max(0, Math.ceil(((op.minZ - originZ) / voxel - BLOCK) / BLOCK));
-    const bz1 = Math.min(nbz - 1, Math.floor(((op.maxZ - originZ) / voxel + 1) / BLOCK));
-    for (let bz = bz0; bz <= bz1; bz++) {
-      for (let by = by0; by <= by1; by++) {
-        for (let bx = bx0; bx <= bx1; bx++) {
-          const bi = (bz * nby + by) * nbx + bx;
-          let list = opLists.get(bi);
-          if (!list) opLists.set(bi, (list = []));
-          list.push(oi);
-        }
-      }
+  try {
+    const cratersFlat = new Float64Array(craters.length * 4);
+    for (let i = 0; i < craters.length; i++) {
+      const c = craters[i];
+      cratersFlat[i * 4] = c.x;
+      cratersFlat[i * 4 + 1] = c.z;
+      cratersFlat[i * 4 + 2] = c.r;
+      cratersFlat[i * 4 + 3] = c.depth;
     }
-  }
-  if (opLists.size === 0) return;
-
-  const strideZ = nx * ny;
-  for (const [bi, list] of opLists) {
-    const bx = bi % nbx;
-    const by = Math.floor(bi / nbx) % nby;
-    const bz = Math.floor(bi / (nbx * nby));
-    const x0 = bx * BLOCK;
-    const xEnd = Math.min(x0 + BLOCK, nx);
-    const y0 = by * BLOCK;
-    const yEnd = Math.min(y0 + BLOCK, ny);
-    const z0 = bz * BLOCK;
-    const zEnd = Math.min(z0 + BLOCK, nz);
-
-    for (let iz = z0; iz < zEnd; iz++) {
-      const z = originZ + iz * voxel;
-      const edgeZ = iz === 0 || iz === nz - 1;
-      for (let ix = x0; ix < xEnd; ix++) {
-        const edge = edgeZ || ix === 0 || ix === nx - 1;
-        if (edge) continue; // forced -1 air at the volume boundary; ops never see it
-        const x = originX + ix * voxel;
-        for (let iy = y0; iy < yEnd; iy++) {
-          if (iy === ny - 1) continue; // top boundary voxel, same forced -1
-          const y = iy * voxel;
-          const idx = ix + iy * nx + iz * strideZ;
-          let d = data[idx];
-          for (let k = 0; k < list.length; k++) {
-            const op = ops[list[k]];
-            const s = op.sdf(x, y, z);
-            d = op.kind === 'add' ? Math.max(d, s) : Math.min(d, -s);
-          }
-          data[idx] = d;
-        }
-      }
-    }
+    const res = mod.fields_profile(
+      nx >>> 0,
+      nz >>> 0,
+      voxel,
+      originX,
+      originZ,
+      s2,
+      crackD,
+      flattenW,
+      flatRaw,
+      mesaOff,
+      cratersFlat,
+      params,
+    );
+    const out = {
+      groundH: res.ground_h,
+      wallMask: res.wall_mask,
+      craterD: res.crater_d,
+      maxH: res.max_h,
+    };
+    res.free(); // getters copied out; drop the wasm-side buffers now
+    console.debug(`[wasm-fields] profile ${(performance.now() - t0).toFixed(1)}ms (wasm)`);
+    return out;
+  } catch (err) {
+    console.error('[wasm-fields] fields_profile failed, falling back to the JS profile', err);
+    return null;
   }
 }

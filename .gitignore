@@ -5,3 +5,4 @@ dist/
 tools/nmap-test/
 wasm/target/
 wasm/target
+/pages-live*.jpeg

@@ -253,13 +253,25 @@
 - [x] colorize port: byte-identical (palette crosses per call), 1.91×
 - [x] fields kernels port (EDT + profile loop): byte-identical, 1.5×;
       placement/rasters stay TS. Pipeline total 372 -> 238 ms (1.57×)
-- [ ] SIMD batch evaluation (4-wide v128 noise) and/or f32 kernels —
-      the structural speedups the scalar port can't reach
-- [ ] Zero-copy views + fill/nets fusion once carve ops move wasm-side
-- [ ] Maybe: computeVertexNormals in wasm (~11 ms); fogOverlays is
-      three.js object building — not portable
-- [ ] Optional: rayon threads behind wasm-bindgen-rayon + a
-      coi-serviceworker shim for GH Pages (SharedArrayBuffer headers)
+- [x] Structural refactor ("wasm for real", 2026-07-07 — docs/WASMGEN.md):
+      typed serde boundary (GenParams/Palette/CarveOpSpec objects, all
+      f64 param vectors deleted), carve-op SDFs + computeVertexNormals
+      ported, fused single-call generate_mesh (volume never crosses;
+      207 ms total, 1.75×), kernels rewritten as a typed Rust library
+      (grid.rs samplers, MapNoise once per call, named per-cell fns),
+      par.rs scalar/rayon switch + native bench: 155 -> 35 ms (4.4×,
+      8 threads) same code; simd128 autovec measured ≈ 2% (nothing)
+- [ ] Stage B: port layout / fields glue (hex raster, craters, cracks,
+      blur, mesa offsets) / carve placement -> ONE generate(params) call;
+      then optionally host it in a Web Worker (async regenerate)
+- [ ] Browser threads: wasm-bindgen-rayon (nightly atomics std) + a
+      coi-serviceworker shim for GH Pages — brings the native 4.4×
+      parallel win to the app
+- [ ] Explicit 4-wide SIMD batching for the noise inner loops (autovec
+      gave ~0; needs restructured lanes to pay)
+- [ ] Parallelize surface nets (now 31% of the parallel-native total;
+      needs a two-pass vertex-index scheme — sequential by design today)
+- [ ] fogOverlays stays three.js (not portable); decor/layout cheap in TS
 
 ## Next (research/voxel3d — arches & overhangs, NO tunnels)
 

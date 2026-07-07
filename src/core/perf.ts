@@ -30,6 +30,22 @@ export function perfMark(stage: string): void {
   t0 = now;
 }
 
+/**
+ * record sub-stage timings measured elsewhere (the fused wasm mesh call
+ * times its stages internally) and advance the mark cursor by their sum,
+ * so the next perfMark measures only its own span — the covered time isn't
+ * double-counted, and only the boundary overhead outside the stages leaks
+ * into the following mark
+ */
+export function perfSpan(stages: PerfRecord): void {
+  let sum = 0;
+  for (const [stage, ms] of Object.entries(stages)) {
+    current[stage] = (current[stage] ?? 0) + ms;
+    sum += ms;
+  }
+  t0 += sum;
+}
+
 /** one compact debug line per regenerate: [perf] volumeFill 73.2 | nets 41.0 | … */
 export function perfLog(): void {
   const parts = Object.entries(current).map(([k, v]) => `${k} ${v.toFixed(1)}`);

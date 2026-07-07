@@ -1,358 +1,316 @@
-//! Faithful port of src/gen/mesher.ts `colorizeJs()` (stage 5 of the wasm
-//! generator move): Sedona palette baked into per-vertex colors plus the
-//! 3-channel `facies` morphology attribute (dome hollow / crater interior /
-//! plateau cap), from the vertex positions + normals, the density volume
-//! (cave-tint probe) and the per-column field grids.
+//! Vertex colorize (port of src/gen/mesher.ts `colorizeJs()`): Sedona palette
+//! baked into per-vertex colors plus the 3-channel `facies` morphology
+//! attribute (dome hollow / crater interior / plateau cap), from the vertex
+//! positions + normals, the density volume (cave-tint probe) and the
+//! per-column field grids.
 //!
-//! Determinism contract:
-//! - Position/normal/field reads are f32 promoted to f64 (exactly what a
-//!   Float32Array read yields in JS); all intermediate math is f64 in JS
-//!   operator order; every store into the output Float32Arrays goes through
-//!   `as f32`.
-//! - The bilinear field sampler matches fields.ts `sample()` exactly
-//!   (floor + clamp to [0, n-2], clamp01 fractions, lerp x then z); the
-//!   crater sampler is NEAREST (js_round + clamp), matching mesher.ts
-//!   `sampleCraterD`.
+//! Structure: the per-vertex math lives in NAMED pieces on `Shader`
+//! (cliff_strata, plateau_weight, plateau_cap, floor_shade, crater_ring,
+//! cave_shade, crack_shade); `run()` is a thin per-vertex loop composing
+//! them. Colors travel as `math::Rgb`, world points/normals as `math::Vec3`
+//! (ground-plane samples as `Vec2`). Sampling goes exclusively through the
+//! shared grid.rs primitives: Grid2::bilinear (fields.ts `sample()`),
+//! Grid2::nearest (mesher.ts `sampleCraterD` — crater distance wants the
+//! crisp rim, not a bilinear smear), VolDims::solid (the rock-overhead
+//! probe) and VolDims::off_surface (the shared just-off-the-surface probe
+//! start, same as the AO bake).
+//!
+//! Determinism contract (Gate 5): deterministic f32, same expressions in the
+//! same operator order — the JS fallback path is visually equivalent, not
+//! bitwise (meshCompare in src/core/wasmGen.ts measures nearness, not
+//! identity).
+//! - Vertex/normal/field reads are f32 and STAY f32 end-to-end (the old
+//!   promote-to-f64 step is gone with the byte-parity contract).
 //! - Palette colors arrive PER CALL (the Palette panel mutates the live
-//!   THREE.Color objects between runs) as linear-space r/g/b floats; the
-//!   color math is plain lerp/multiply on those components, mirroring
-//!   THREE.Color copy/lerp/multiplyScalar semantics.
-//!
-//! KNOWN NON-EXACTNESS: the strata-band jitter uses `Math.sin` and the
-//! crater-crest / crack-lip gaussians use `Math.exp`. V8's transcendentals
-//! are not bit-identical to Rust's libm — either may differ by ~1 ULP.
-//! Parity is therefore NEAR-identical, not exact: the colorParity harness
-//! (src/core/wasmGen.ts) may report a nonzero exactDiffCount, but maxDiff
-//! must stay < 1e-6. Everything else (bilinear samplers, smoothsteps,
-//! simplex noise, lerps) is exact-order IEEE and contributes nothing.
-//!
-//! `params` layout (spec COLOR PARAMS order — must match the flattener in
-//! src/gen/volumeWasm.ts):
-//! 0 terraceStep, 1 wallHeight, 2 wallVar.
-//!
-//! `palette` layout (spec PALETTE order — must match flattenPalette() in
-//! src/gen/mesher.ts): 15 colors x 3 (r, g, b) = 45 f64 values:
-//! strata0, strata1, strata2, strata3, strata4, floorA, floorB, cap,
-//! crevice, craterIn, craterWall, craterRim, ejecta, crackDeep, crackLip.
+//!   THREE.Color objects between runs) as linear-space r/g/b floats,
+//!   narrowed once by serde on decode; the color math maps 1:1 onto
+//!   THREE.Color semantics via math::Rgb — `Rgb::lerp` IS Color.lerp's
+//!   `c + (o - c) * t` per channel and `Rgb::scaled` IS
+//!   Color.multiplyScalar, so every `tmp.lerp(...)` / `tmp.mul(...)` in the
+//!   JS becomes `tmp = tmp.lerp(...)` / `tmp = tmp.scaled(...)` with the
+//!   same expressions.
+//! - Per-vertex work is independent, so the loop runs through par.rs
+//!   (serial by default, rayon under `--features parallel`) — element
+//!   enumeration preserves vertex index order either way, and scalar vs
+//!   parallel outputs are bitwise identical.
 
-use crate::noise::{fbm2, fbm3, ridged2, smoothstep, Noise2, Noise3};
-use crate::volume::js_round;
-use wasm_bindgen::prelude::*;
+use crate::grid::{FieldGrids, MapNoise, VolDims};
+use crate::math::{vec3, Rgb, Vec2, Vec3};
+use crate::noise::{clamp01, dome_swell, fbm3, gully, smoothstep, Noise2};
+use crate::par;
+use crate::params::{GenParams, Palette};
 
 /// cave-tint probe march heights above the offset start point (world units)
-const CAVE_STEPS: [f64; 4] = [0.55, 1.0, 1.6, 2.4];
-
-/// JS `clamp01` written branch-for-branch (core/noise.ts): NaN falls through
-/// both comparisons and returns NaN, same as the JS ternary chain.
-#[inline(always)]
-fn clamp01(v: f64) -> f64 {
-    if v < 0.0 {
-        0.0
-    } else if v > 1.0 {
-        1.0
-    } else {
-        v
-    }
-}
-
-/// Plain f64 triple with THREE.Color op semantics: `copy` = assign (Copy),
-/// `lerp(o, t)`: each channel += (other - this) * t; `mul(s)`: *= s.
-#[derive(Clone, Copy)]
-struct Col {
-    r: f64,
-    g: f64,
-    b: f64,
-}
-
-impl Col {
-    #[inline(always)]
-    fn lerp(&mut self, o: Col, t: f64) {
-        self.r += (o.r - self.r) * t;
-        self.g += (o.g - self.g) * t;
-        self.b += (o.b - self.b) * t;
-    }
-
-    #[inline(always)]
-    fn mul(&mut self, s: f64) {
-        self.r *= s;
-        self.g *= s;
-        self.b *= s;
-    }
-}
+const CAVE_STEPS: [f32; 4] = [0.55, 1.0, 1.6, 2.4];
 
 /// mesher.ts `fbm2Cheap`: two raw octaves at fixed scales
 #[inline(always)]
-fn fbm2_cheap(n2: &Noise2, x: f64, z: f64) -> f64 {
-    n2.sample(x * 0.13, z * 0.13) * 0.65 + n2.sample(x * 0.47, z * 0.47) * 0.35
+fn fbm2_cheap(n2: &Noise2, p: Vec2) -> f32 {
+    n2.sample(p * 0.13) * 0.65 + n2.sample(p * 0.47) * 0.35
 }
 
-#[wasm_bindgen]
-pub struct ColorizeResult {
-    colors: Vec<f32>,
-    facies: Vec<f32>,
+/// Typed output of `run()`: one rgb color + one xyz facies triple per vertex.
+pub struct Colorized {
+    pub colors: Vec<[f32; 3]>,
+    pub facies: Vec<[f32; 3]>,
 }
 
-#[wasm_bindgen]
-impl ColorizeResult {
-    #[wasm_bindgen(getter)]
-    pub fn colors(&self) -> Vec<f32> {
-        self.colors.clone()
+/// Everything one vertex's shading needs, borrowed for the whole run: volume
+/// (cave probe), field grids (ground/s2/crack/crater samplers), the map's
+/// shared noise, the live palette (math::Rgb triples, decoded per call) and
+/// the params the strata bands read.
+struct Shader<'a> {
+    dims: &'a VolDims,
+    data: &'a [f32],
+    fields: &'a FieldGrids<'a>,
+    noise: &'a MapNoise,
+    palette: &'a Palette,
+    params: &'a GenParams,
+    /// strata band height — JS `Math.max(0.4, params.terraceStep)`
+    strata_step: f32,
+}
+
+impl<'a> Shader<'a> {
+    fn new(
+        dims: &'a VolDims,
+        data: &'a [f32],
+        fields: &'a FieldGrids<'a>,
+        params: &'a GenParams,
+        palette: &'a Palette,
+        noise: &'a MapNoise,
+    ) -> Shader<'a> {
+        Shader {
+            dims,
+            data,
+            fields,
+            noise,
+            palette,
+            params,
+            strata_step: 0.4f32.max(params.terrace_step),
+        }
     }
 
-    #[wasm_bindgen(getter)]
-    pub fn facies(&self) -> Vec<f32> {
-        self.facies.clone()
-    }
-}
-
-/// Port of colorizeJs(): one rgb color + one xyz facies triple per vertex
-/// (positions.len() / 3 each). Volume grid (`nx/ny/nz/voxel/origin_*`) feeds
-/// the cave-tint probe; field grid (`fnx/fnz/fvoxel/forigin_*`) feeds the
-/// groundH/s2/crackD bilinear samplers and the craterD nearest sampler.
-/// Noise is constructed exactly like NoiseKit::new from `seed`.
-#[wasm_bindgen]
-#[allow(clippy::too_many_arguments)]
-pub fn colorize(
-    positions: &[f32],
-    normals: &[f32],
-    data: &[f32],
-    nx: u32,
-    ny: u32,
-    nz: u32,
-    voxel: f64,
-    origin_x: f64,
-    origin_z: f64,
-    fnx: u32,
-    fnz: u32,
-    fvoxel: f64,
-    forigin_x: f64,
-    forigin_z: f64,
-    ground_h: &[f32],
-    s2: &[f32],
-    crack_d: &[f32],
-    crater_d: &[f32],
-    params: &[f64],
-    palette: &[f64],
-    seed: u32,
-) -> ColorizeResult {
-    let nx = nx as usize;
-    let ny = ny as usize;
-    let nz = nz as usize;
-    let fnx = fnx as usize;
-    let fnz = fnz as usize;
-    assert_eq!(data.len(), nx * ny * nz, "data length");
-    assert_eq!(positions.len(), normals.len(), "positions/normals length");
-    let n_col = fnx * fnz;
-    assert_eq!(ground_h.len(), n_col, "groundH length");
-    assert_eq!(s2.len(), n_col, "s2 length");
-    assert_eq!(crack_d.len(), n_col, "crackD length");
-    assert_eq!(crater_d.len(), n_col, "craterD length");
-    assert!(params.len() >= 3, "params vector too short");
-    assert_eq!(palette.len(), 45, "palette length");
-
-    // COLOR PARAMS order — see module doc
-    let terrace_step = params[0];
-    let wall_height = params[1];
-    let wall_var = params[2];
-
-    // PALETTE order — see module doc
-    let pc = |k: usize| Col {
-        r: palette[k * 3],
-        g: palette[k * 3 + 1],
-        b: palette[k * 3 + 2],
-    };
-    let strata = [pc(0), pc(1), pc(2), pc(3), pc(4)];
-    let floor_a = pc(5);
-    let floor_b = pc(6);
-    let cap = pc(7);
-    let crevice = pc(8);
-    let crater_in = pc(9);
-    let crater_wall = pc(10);
-    let crater_rim = pc(11);
-    let ejecta = pc(12);
-    let crack_deep = pc(13);
-    let crack_lip = pc(14);
-
-    // same seed derivation as core/noise.ts makeNoise() / lib.rs NoiseKit
-    let n2 = Noise2::new(seed ^ 0x2f6_e2b1);
-    let n3 = Noise3::new(seed ^ 0x5b7_e4d3);
-
-    // fields.ts `sample()` factory: bilinear over a column grid — floor +
-    // clamp base cell to [0, n-2] (JS max(0, min(n-2, floor))), clamp01
-    // fractions, lerp x then z
-    let sample = |arr: &[f32], x: f64, z: f64| -> f64 {
-        let fx = (x - forigin_x) / fvoxel;
-        let fz = (z - forigin_z) / fvoxel;
-        let x0 = fx.floor().min((fnx - 2) as f64).max(0.0);
-        let z0 = fz.floor().min((fnz - 2) as f64).max(0.0);
-        let tx = clamp01(fx - x0);
-        let tz = clamp01(fz - z0);
-        let i00 = z0 as usize * fnx + x0 as usize;
-        let a = arr[i00] as f64 + (arr[i00 + 1] as f64 - arr[i00] as f64) * tx;
-        let b = arr[i00 + fnx] as f64 + (arr[i00 + fnx + 1] as f64 - arr[i00 + fnx] as f64) * tx;
-        a + (b - a) * tz
-    };
-
-    // mesher.ts sampleCraterD: NEAREST (js_round + clamp), NOT bilinear
-    let sample_crater = |x: f64, z: f64| -> f64 {
-        let fx = (x - forigin_x) / fvoxel;
-        let fz = (z - forigin_z) / fvoxel;
-        let ix = js_round(fx).min((fnx - 1) as f64).max(0.0) as usize;
-        let iz = js_round(fz).min((fnz - 1) as f64).max(0.0) as usize;
-        crater_d[iz * fnx + ix] as f64
-    };
-
-    // mesher.ts plateauWeight(): cap = near own column top AND (deep inside
-    // a wall region OR genuinely tall), gated on the column being high
-    let plateau_weight = |x: f64, y: f64, z: f64| -> f64 {
-        let h_eff = sample(ground_h, x, z).max(y);
-        let top = smoothstep(h_eff - 1.7, h_eff - 1.1, y);
+    /// mesher.ts `plateauWeight()`: how much an up-facing surface reads as
+    /// pale plateau cap, 0..1. A genuine cap must be (a) at/near its own
+    /// column's top — 3D-carved ledges, wash lips and grotto floors sit far
+    /// below their column's groundH — and (b) either deep inside a wall
+    /// region (a true mesa top, however sunken by the per-region offsets) or
+    /// genuinely tall (full-height rims). Low rounded knobs at wall BASES
+    /// fail both: previously they crossed a bare y threshold and glowed
+    /// bleached-cream inside shadowed bases, reading as light leaking
+    /// through the rock.
+    fn plateau_weight(&self, p: Vec3) -> f32 {
+        let g = p.xz();
+        let h_eff = self.fields.ground_h.bilinear(g).max(p.y);
+        let top = smoothstep(h_eff - 1.7, h_eff - 1.1, p.y);
         if top <= 0.0 {
             return 0.0;
         }
-        let interior = smoothstep(1.1, 1.7, -sample(s2, x, z));
-        let tall = smoothstep(wall_height * 0.6, wall_height * 0.8, y);
+        let wall_height = self.params.wall_height;
+        let interior = smoothstep(1.1, 1.7, -self.fields.s2.bilinear(g));
+        let tall = smoothstep(wall_height * 0.6, wall_height * 0.8, p.y);
         let high = interior.max(tall) * smoothstep(wall_height * 0.35, wall_height * 0.5, h_eff);
         top * high
-    };
-
-    // rock-overhead probe: js_round volume lookups, bounds compared in f64
-    // on the un-cast js_round result, EXACTLY like the JS early returns
-    let inv = 1.0 / voxel;
-    let bx = nx as f64;
-    let by = ny as f64;
-    let bz = nz as f64;
-    let solid_above = |x: f64, y: f64, z: f64| -> bool {
-        let ix = js_round((x - origin_x) * inv);
-        if ix < 0.0 || ix >= bx {
-            return false;
-        }
-        let iy = js_round(y * inv);
-        if iy < 0.0 || iy >= by {
-            return false;
-        }
-        let iz = js_round((z - origin_z) * inv);
-        if iz < 0.0 || iz >= bz {
-            return false;
-        }
-        data[ix as usize + iy as usize * nx + iz as usize * nx * ny] > 0.0
-    };
-
-    let count = positions.len() / 3;
-    let mut colors = vec![0.0f32; count * 3];
-    let mut facies = vec![0.0f32; count * 3];
-    // JS: Math.max(0.4, params.terraceStep)
-    let strata_step = 0.4f64.max(terrace_step);
-
-    for i in 0..count {
-        let x = positions[i * 3] as f64;
-        let y = positions[i * 3 + 1] as f64;
-        let z = positions[i * 3 + 2] as f64;
-        let n_y = normals[i * 3 + 1] as f64;
-        let s2v = sample(s2, x, z);
-
-        let dither = fbm3(&n3, x * 0.35, y * 0.5, z * 0.35, 2);
-        let dome = fbm2(&n2, x * 0.045 + 11.0, z * 0.045 - 23.0, 3);
-        let crater_dist = sample_crater(x, z);
-        let cap_w = plateau_weight(x, y, z);
-        facies[i * 3] = clamp01((-dome - 0.05) / 0.55) as f32;
-        facies[i * 3 + 1] = (1.0 - smoothstep(0.8, 1.02, crater_dist)) as f32;
-        facies[i * 3 + 2] = cap_w as f32;
-
-        let mut tmp;
-        if n_y < 0.65 {
-            // cliff face: quantized strata bands; the index CLAMPS at the
-            // top of the dark->light sequence (no wrap)
-            let band = ((y + dither * 0.35) / strata_step).floor();
-            let bi = band.max(0.0).min(4.0) as usize;
-            tmp = strata[bi];
-            if band > 4.0 {
-                // above the sequence: subtle per-band shade jitter — the JS
-                // sin-hash `Math.sin(band * 12.9898) * 43758.5453`; libm sin
-                // may differ from V8 by ~1 ULP (see module doc)
-                let j = (band * 12.9898).sin() * 43758.5453;
-                tmp.mul(0.92 + (j - j.floor()) * 0.12);
-            }
-            // slight vertical gradient: darker at base
-            let base_dark = clamp01(1.0 - y / (wall_height + wall_var));
-            tmp.mul(0.95 - base_dark * 0.15 + dither * 0.04);
-        } else if cap_w > 0.4 {
-            // plateau top
-            tmp = cap;
-            tmp.lerp(strata[4], clamp01(0.3 + dither * 0.4));
-            // sand pockets collect in the dome hollows
-            if dome < -0.12 {
-                tmp.lerp(floor_a, smoothstep(0.12, 0.5, -dome) * 0.6);
-            }
-            // drainage lines read darker (desert varnish in the channels)
-            let g = ridged2(&n2, x * 0.35 + 7.7, z * 0.35 - 3.1, 2);
-            tmp.mul(1.0 - g * g * 0.22 + dither * 0.04);
-        } else {
-            // canyon floor
-            let t = clamp01(0.5 + fbm2_cheap(&n2, x, z) * 0.7);
-            tmp = floor_a;
-            tmp.lerp(floor_b, t);
-
-            // crater bands: scorched bowl -> rust inner slope -> bleached
-            // rim crest -> pale ejecta dust fading out
-            let cd = crater_dist;
-            if cd < 1.5 {
-                let ring = cd + dither * 0.08;
-                if ring < 0.85 {
-                    let wall_t = smoothstep(0.2, 0.8, ring); // bowl slope band
-                    let mut bowl = crater_in;
-                    bowl.lerp(crater_wall, wall_t);
-                    tmp.lerp(bowl, smoothstep(0.85, 0.45, ring) * 0.8);
-                }
-                // libm exp may differ from V8 by ~1 ULP (see module doc)
-                let crest = (-((ring - 0.92) * (ring - 0.92)) / 0.016).exp();
-                tmp.lerp(crater_rim, crest * 0.75);
-                if ring > 1.02 {
-                    tmp.lerp(ejecta, smoothstep(1.5, 1.05, ring) * 0.3);
-                }
-            }
-
-            // contact shading at wall bases; up-facing surfaces ON the wall
-            // footprint (s2 < 0) darken further toward rock shelf
-            let contact = clamp01(1.0 - s2v / 1.6);
-            if contact > 0.0 {
-                tmp.lerp(crevice, contact * 0.28 + smoothstep(0.0, 0.8, -s2v) * 0.25);
-            }
-            tmp.mul(1.0 + dither * 0.05);
-        }
-
-        // interior surfaces under overhanging rock have no sky above; pull
-        // them hard toward the crevice shade. Start point offset along the
-        // vertex normal, exactly like the AO bake.
-        {
-            let px = x + normals[i * 3] as f64 * voxel * 0.8;
-            let py = y + n_y * voxel * 0.8;
-            let pz = z + normals[i * 3 + 2] as f64 * voxel * 0.8;
-            let mut hits = 0u32;
-            for s in CAVE_STEPS.iter() {
-                if solid_above(px, py + s, pz) {
-                    hits += 1;
-                }
-            }
-            if hits > 0 {
-                tmp.lerp(crevice, (hits as f64 / CAVE_STEPS.len() as f64) * 0.62);
-            }
-        }
-
-        // fissure shading (floor AND ridge tops): slot interior falls to
-        // near-black, pale weathered lip just outside
-        let ck = sample(crack_d, x, z);
-        if ck < 1.35 {
-            let cr = ck + dither * 0.12;
-            tmp.lerp(crack_deep, smoothstep(1.05, 0.3, cr) * 0.88);
-            let lip = (-((cr - 1.12) * (cr - 1.12)) / 0.012).exp();
-            tmp.lerp(crack_lip, lip * 0.3);
-        }
-
-        colors[i * 3] = tmp.r as f32;
-        colors[i * 3 + 1] = tmp.g as f32;
-        colors[i * 3 + 2] = tmp.b as f32;
     }
 
-    ColorizeResult { colors, facies }
+    /// Cliff face: quantized strata bands. The band index CLAMPS at the top
+    /// of the authored dark->light sequence (no wrap) — cycling it wrapped
+    /// the darkest bottom stratum back in as a near-black ring on tall
+    /// (per-mesa offset) walls.
+    fn cliff_strata(&self, y: f32, dither: f32) -> Rgb {
+        let band = ((y + dither * 0.35) / self.strata_step).floor();
+        let bi = band.clamp(0.0, 4.0) as usize;
+        let mut tmp = self.palette.strata[bi];
+        if band > 4.0 {
+            // above the sequence: stay in the light family — subtle per-band
+            // shade jitter keeps the banding readable (the JS sin-hash
+            // `Math.sin(band * 12.9898) * 43758.5453`, in f32)
+            let j = (band * 12.9898).sin() * 43758.5453;
+            tmp = tmp.scaled(0.92 + (j - j.floor()) * 0.12);
+        }
+        // slight vertical gradient: darker at base
+        let base_dark = clamp01(1.0 - y / (self.params.wall_height + self.params.wall_var));
+        tmp.scaled(0.95 - base_dark * 0.15 + dither * 0.04)
+    }
+
+    /// Plateau top — see `plateau_weight()` for what qualifies (and what the
+    /// old bare y-threshold got wrong).
+    fn plateau_cap(&self, g: Vec2, dome: f32, dither: f32) -> Rgb {
+        let mut tmp = self
+            .palette
+            .cap
+            .lerp(self.palette.strata[4], clamp01(0.3 + dither * 0.4));
+        // sand pockets collect in the dome hollows (same field as the swell)
+        if dome < -0.12 {
+            tmp = tmp.lerp(self.palette.floor_a, smoothstep(0.12, 0.5, -dome) * 0.6);
+        }
+        // drainage lines read darker (desert varnish in the channels)
+        let gl = gully(&self.noise.n2, g);
+        tmp.scaled(1.0 - gl * gl * 0.22 + dither * 0.04)
+    }
+
+    /// Canyon floor: warm sand duotone broken by crater rings, darkened
+    /// toward rock at wall contact.
+    fn floor_shade(&self, g: Vec2, s2v: f32, crater_dist: f32, dither: f32) -> Rgb {
+        let t = clamp01(0.5 + fbm2_cheap(&self.noise.n2, g) * 0.7);
+        let mut tmp = self.palette.floor_a.lerp(self.palette.floor_b, t);
+
+        tmp = self.crater_ring(tmp, crater_dist, dither);
+
+        // contact shading at wall bases; up-facing surfaces ON the wall
+        // footprint itself (s2 < 0 — wash lips, basal knobs demoted from the
+        // cap branch) darken further toward rock shelf so bright sand never
+        // pops inside a shadowed wall base
+        let contact = clamp01(1.0 - s2v / 1.6);
+        if contact > 0.0 {
+            tmp = tmp.lerp(
+                self.palette.crevice,
+                contact * 0.28 + smoothstep(0.0, 0.8, -s2v) * 0.25,
+            );
+        }
+        tmp.scaled(1.0 + dither * 0.05)
+    }
+
+    /// Crater bands: scorched bowl -> rust inner slope -> bleached rim
+    /// crest -> pale ejecta dust fading out (edges broken up by dither).
+    fn crater_ring(&self, mut tmp: Rgb, crater_dist: f32, dither: f32) -> Rgb {
+        if crater_dist < 1.5 {
+            let ring = crater_dist + dither * 0.08;
+            if ring < 0.85 {
+                let wall_t = smoothstep(0.2, 0.8, ring); // bowl slope band
+                let bowl = self.palette.crater_in.lerp(self.palette.crater_wall, wall_t);
+                tmp = tmp.lerp(bowl, smoothstep(0.85, 0.45, ring) * 0.8);
+            }
+            let crest = (-((ring - 0.92) * (ring - 0.92)) / 0.016).exp();
+            tmp = tmp.lerp(self.palette.crater_rim, crest * 0.75);
+            if ring > 1.02 {
+                tmp = tmp.lerp(self.palette.ejecta, smoothstep(1.5, 1.05, ring) * 0.3);
+            }
+        }
+        tmp
+    }
+
+    /// Rock-overhead probe (grotto/notch interiors): interior surfaces under
+    /// overhanging rock — wash grottoes, notch floors, vault backs — have no
+    /// sky above; pull them hard toward the crevice shade. Without this,
+    /// up-facing surfaces inside a hollow get classified as bright sand
+    /// floor, which pops inside a shadowed wall base and reads like light
+    /// leaking through the rock. Start point via the shared
+    /// `VolDims::off_surface` (offset along the vertex normal, exactly like
+    /// the AO bake); vertical samples via VolDims::solid (js_round + bounds
+    /// rejection on the un-cast rounded float, sky-only march).
+    fn cave_shade(&self, mut tmp: Rgb, p: Vec3, n: Vec3) -> Rgb {
+        let start = self.dims.off_surface(p, n);
+        let mut hits = 0u32;
+        for &s in CAVE_STEPS.iter() {
+            if self
+                .dims
+                .solid(self.data, vec3(start.x, start.y + s, start.z))
+            {
+                hits += 1;
+            }
+        }
+        if hits > 0 {
+            tmp = tmp.lerp(
+                self.palette.crevice,
+                (hits as f32 / CAVE_STEPS.len() as f32) * 0.62,
+            );
+        }
+        tmp
+    }
+
+    /// Fissure shading (applies on floor AND across ridge tops): slot
+    /// interior falls to near-black, pale weathered lip just outside. Also
+    /// tints spots where the carve was clipped at flat hexes, so the crack
+    /// reads continuous over passable corners.
+    fn crack_shade(&self, mut tmp: Rgb, g: Vec2, dither: f32) -> Rgb {
+        let ck = self.fields.crack_d.bilinear(g);
+        if ck < 1.35 {
+            let cr = ck + dither * 0.12;
+            tmp = tmp.lerp(self.palette.crack_deep, smoothstep(1.05, 0.3, cr) * 0.88);
+            let lip = (-((cr - 1.12) * (cr - 1.12)) / 0.012).exp();
+            tmp = tmp.lerp(self.palette.crack_lip, lip * 0.3);
+        }
+        tmp
+    }
+
+    /// One vertex: classify (cliff / plateau cap / canyon floor), then apply
+    /// the surface-independent cave and crack tints, write rgb + facies.
+    fn shade_vertex(
+        &self,
+        vertex: [f32; 3],
+        normal: [f32; 3],
+        col_out: &mut [f32; 3],
+        fac_out: &mut [f32; 3],
+    ) {
+        let p = Vec3::from_f32(vertex);
+        let n = Vec3::from_f32(normal);
+        let g = p.xz();
+        let s2v = self.fields.s2.bilinear(g);
+
+        // dither samples an anisotropically squashed noise domain (y at 0.5,
+        // ground at 0.35) — a noise coordinate, not a world point, so the
+        // sample point is built as an explicit vec3 (naming, not math)
+        let dither = fbm3(&self.noise.n3, vec3(p.x * 0.35, p.y * 0.5, p.z * 0.35), 2);
+        let dome = dome_swell(&self.noise.n2, g);
+        let crater_dist = self.fields.crater_d.nearest(g);
+        let cap_w = self.plateau_weight(p);
+
+        // morphology channels for the shader: x = dome hollow (same field as
+        // the mesa-top swell in fields.ts) -> drift sand pools there;
+        // y = crater interior weight (1 in the bowl, fading out at the rim
+        // crest); z = plateau-cap weight (gates the pale mesa texture layer)
+        *fac_out = [
+            clamp01((-dome - 0.05) / 0.55),
+            1.0 - smoothstep(0.8, 1.02, crater_dist),
+            cap_w,
+        ];
+
+        let tmp = if n.y < 0.65 {
+            self.cliff_strata(p.y, dither)
+        } else if cap_w > 0.4 {
+            self.plateau_cap(g, dome, dither)
+        } else {
+            self.floor_shade(g, s2v, crater_dist, dither)
+        };
+        let tmp = self.cave_shade(tmp, p, n);
+        let tmp = self.crack_shade(tmp, g, dither);
+
+        *col_out = tmp.to_f32();
+    }
+}
+
+/// Colorize a mesh: one rgb color + one xyz facies triple per vertex. The
+/// density volume feeds the cave-tint probe; the field grids feed the
+/// groundH/s2/crackD bilinear samplers and the craterD nearest sampler;
+/// `noise` is the map's shared kit (built once per generate — no per-stage
+/// perm-table rebuild).
+#[allow(clippy::too_many_arguments)]
+pub fn run(
+    vertices: &[[f32; 3]],
+    normals: &[[f32; 3]],
+    data: &[f32],
+    dims: &VolDims,
+    fields: &FieldGrids,
+    params: &GenParams,
+    palette: &Palette,
+    noise: &MapNoise,
+) -> Colorized {
+    assert_eq!(data.len(), dims.n.count(), "data length");
+    assert_eq!(vertices.len(), normals.len(), "vertices/normals length");
+    let n_col = fields.ground_h.n.count();
+    assert_eq!(fields.ground_h.data.len(), n_col, "groundH length");
+    assert_eq!(fields.s2.data.len(), n_col, "s2 length");
+    assert_eq!(fields.crack_d.data.len(), n_col, "crackD length");
+    assert_eq!(fields.crater_d.data.len(), n_col, "craterD length");
+
+    let shader = Shader::new(dims, data, fields, params, palette, noise);
+    let mut colors = vec![[0.0f32; 3]; vertices.len()];
+    let mut facies = vec![[0.0f32; 3]; vertices.len()];
+
+    par::for_each2_mut(&mut colors, &mut facies, |i, col_out, fac_out| {
+        shader.shade_vertex(vertices[i], normals[i], col_out, fac_out);
+    });
+
+    Colorized { colors, facies }
 }

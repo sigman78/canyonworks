@@ -1,41 +1,69 @@
 /* tslint:disable */
 /* eslint-disable */
 
-export class ColorizeResult {
-    private constructor();
-    free(): void;
-    [Symbol.dispose](): void;
-    readonly colors: Float32Array;
-    readonly facies: Float32Array;
-}
-
+/**
+ * wasm result wrapper around `Profile` — getters COPY out (established
+ * pattern: the TS side keeps the buffers long-term, so they must be copies,
+ * never views into wasm memory). Buffer getters via the shared
+ * `pipeline::typed_array_getters!` (one copy, wasm memory -> JS heap);
+ * `max_h` has a manual getter because it promotes f32 -> f64 at the
+ * boundary (same four getter names/types as before — ABI unchanged).
+ */
 export class FieldsProfileResult {
     private constructor();
     free(): void;
     [Symbol.dispose](): void;
     readonly crater_d: Float32Array;
     readonly ground_h: Float32Array;
+    /**
+     * `max_h` is an f32 max internally (Gate-5 whitelist item 5); it is
+     * promoted to f64 ONLY here, at the JS boundary — the getter keeps the
+     * f64 (JS number) ABI it always had.
+     */
     readonly max_h: number;
     readonly wall_mask: Float32Array;
 }
 
-export class NetsResult {
+/**
+ * Final mesh buffers + block stats + per-stage timing, crossing the
+ * boundary ONCE — `MeshBuffers` flattened for JS (the `[f32; 3]` buffers
+ * become flat Vecs via `into_flattened`, a free reinterpretation; the JS
+ * ABI is unchanged).
+ */
+export class MeshResult {
     private constructor();
     free(): void;
     [Symbol.dispose](): void;
+    readonly ao: Float32Array;
+    readonly colors: Float32Array;
+    readonly facies: Float32Array;
     readonly indices: Uint32Array;
+    readonly mixed_count: number;
+    readonly nbx: number;
+    readonly nby: number;
+    readonly nbz: number;
+    readonly normals: Float32Array;
     readonly positions: Float32Array;
+    readonly solid_count: number;
+    readonly stage_ms: Float64Array;
 }
 
 /**
- * Mirror of core/noise.ts `NoiseKit` — same seed derivation
- * (`seed ^ 0x2f6e2b1` / `seed ^ 0x5b7e4d3`), same output values.
+ * Parity/bench harness face over the map's shared noise (core/noise.ts
+ * `NoiseKit`, pruned to the methods the TS harness in src/core/wasmGen.ts
+ * actually calls: `noise2`/`noise3` samples + the `fill_fbm3` bench
+ * kernel). Delegates to `grid::MapNoise`, the ONE home for the makeNoise
+ * seed derivation (`seed ^ 0x2f6e2b1` / `seed ^ 0x5b7e4d3`), so the harness
+ * provably samples the same fields as every kernel stage. The JS-number
+ * boundary stays f64 in/out; args narrow to f32 AND repack into the
+ * compound `Vec2`/`Vec3` sample points ONCE at entry (Gate-5 whitelist
+ * item 4 + the Gate-7 fringe rule — scalars live only here, at the
+ * #[wasm_bindgen] surface). Kernel noise math is f32, so the TS parity
+ * harness measures nearness to the JS noise, not bit-identity.
  */
 export class NoiseKit {
     free(): void;
     [Symbol.dispose](): void;
-    fbm2(x: number, y: number, octaves: number): number;
-    fbm3(x: number, y: number, z: number, octaves: number): number;
     /**
      * Bench/parity kernel: fill an nx×ny×nz grid with fbm3 sampled at
      * world coordinates (ix,iy,iz)·voxel·freq — the same access pattern
@@ -47,118 +75,74 @@ export class NoiseKit {
     constructor(seed: number);
     noise2(x: number, y: number): number;
     noise3(x: number, y: number, z: number): number;
-    ridged2(x: number, y: number, octaves: number): number;
-}
-
-export class VolumeResult {
-    private constructor();
-    free(): void;
-    [Symbol.dispose](): void;
-    readonly block_type: Uint8Array;
-    readonly data: Float32Array;
-    readonly mixed_count: number;
-    readonly nbx: number;
-    readonly nby: number;
-    readonly nbz: number;
-    readonly solid_count: number;
 }
 
 /**
- * Port of bakeAo(): one AO value per vertex (positions.len() / 3). Rays
- * start just off the surface along the vertex normal, get bent mildly
- * toward the normal, and march AO_RADII; the first solid hit adds its
- * AO_HIT weight. ao = 1 - occ / 12.
- */
-export function bake_ao(positions: Float32Array, normals: Float32Array, data: Float32Array, nx: number, ny: number, nz: number, voxel: number, origin_x: number, origin_z: number): Float32Array;
-
-/**
- * Port of colorizeJs(): one rgb color + one xyz facies triple per vertex
- * (positions.len() / 3 each). Volume grid (`nx/ny/nz/voxel/origin_*`) feeds
- * the cave-tint probe; field grid (`fnx/fnz/fvoxel/forigin_*`) feeds the
- * groundH/s2/crackD bilinear samplers and the craterD nearest sampler.
- * Noise is constructed exactly like NoiseKit::new from `seed`.
- */
-export function colorize(positions: Float32Array, normals: Float32Array, data: Float32Array, nx: number, ny: number, nz: number, voxel: number, origin_x: number, origin_z: number, fnx: number, fnz: number, fvoxel: number, forigin_x: number, forigin_z: number, ground_h: Float32Array, s2: Float32Array, crack_d: Float32Array, crater_d: Float32Array, params: Float64Array, palette: Float64Array, seed: number): ColorizeResult;
-
-/**
- * Port of the fields.ts step-7 per-column ground-profile loop
- * (`fieldsProfileJs` on the TS side): floor noise + crater bowls/rims +
- * talus + wall profile (plateau quantization, per-mesa offset, doming,
- * terraced strata, gullies) + hex flattening + fissure carving.
+ * wasm export wrapper over `profile` — the per-column ground-profile pass.
  *
- * Inputs: `s2` is the signed distance ALREADY scaled to world units by the
- * caller; `craters` is 4-stride [x, z, r, depth]; `params` uses the FIELDS
- * PARAMS order in the module doc. The loop only uses the 2D noise channel:
- * `Noise2::new(seed ^ 0x2f6e2b1)`, the same derivation as NoiseKit.
+ * Typed-params boundary (Gate 2): `params` is the live GenParams object
+ * decoded via serde (replaces the old 15-entry f64 vec + separate seed;
+ * seed = `params.seed >>> 0`). `craters` stays a 4-stride [x, z, r, depth]
+ * f64 array — it is a JS-built placement list, fine as-is. `s2` must be
+ * ALREADY scaled to world units by the caller.
  */
-export function fields_profile(nx: number, nz: number, voxel: number, origin_x: number, origin_z: number, s2: Float32Array, crack_d: Float32Array, flatten_w: Float32Array, flat_raw: Uint8Array, mesa_off: Float32Array, craters: Float64Array, params: Float64Array, seed: number): FieldsProfileResult;
+export function fields_profile(nx: number, nz: number, voxel: number, origin_x: number, origin_z: number, s2: Float32Array, crack_d: Float32Array, flatten_w: Float32Array, flat_raw: Uint8Array, mesa_off: Float32Array, craters: Float64Array, params: any): FieldsProfileResult;
 
 /**
- * Port of buildDensityVolume() minus carve-op SDF evaluation (ops stay in
- * JS); op bounds are still consumed here to force affected blocks MIXED.
+ * Fused generator entry point — the whole mesh chain in one crossing.
  *
- * `params` layout (spec PARAMS order):
- * 0 wallNoiseAmp, 1 wallNoiseFreq, 2 ledgeAmp, 3 terraceStep, 4 floorBase,
- * 5 washAmp, 6 washHeight, 7 washCoverage, 8 washScale.
- *
- * `op_bounds` is 6 f64 per op: [minX, maxX, minY, maxY, minZ, maxZ].
+ * Inputs: the five 2D field rasters (ground_h/wall_mask/s2 feed the fill;
+ * crack_d/crater_d feed colorize — the volume shares the field raster's
+ * x/z grid, so one set of dims covers both), `max_h` (ny is derived here
+ * via `volume_ny`), and carve ops + params + palette as JS objects decoded
+ * via serde (`params::from_js`, the one decode+error-map home).
+ * `force_all_mixed` is the bench flag disabling block classification.
  */
-export function fill_volume(seed: number, nx: number, ny: number, nz: number, voxel: number, origin_x: number, origin_z: number, ground_h: Float32Array, wall_mask: Float32Array, s2: Float32Array, params: Float64Array, op_bounds: Float64Array, force_all_mixed: boolean): VolumeResult;
+export function generate_mesh(ground_h: Float32Array, wall_mask: Float32Array, s2: Float32Array, crack_d: Float32Array, crater_d: Float32Array, nx: number, nz: number, voxel: number, origin_x: number, origin_z: number, max_h: number, ops: any, params: any, palette: any, force_all_mixed: boolean): MeshResult;
 
 /**
- * Port of sdf2d.ts `signedDistance()`: signed distance in CELL units,
- * positive inside the open region, negative inside walls. The `* voxel`
- * world-unit scaling happens in the TS caller (fields.ts step 2), NOT here.
- * Expected bit-identical to the JS (sqrt is IEEE-exact).
+ * wasm export wrapper over `edt` — JS ABI unchanged (Stage B may move its
+ * caller in-crate later); the fringe repacks the scalar dims into the
+ * `Idx2` the typed API takes.
  */
 export function signed_distance(open_raster: Uint8Array, nx: number, nz: number): Float32Array;
-
-/**
- * Port of surfaceNets(): one vertex per sign-crossing cell (centroid of
- * edge intersections), quads (as triangle pairs) across every sign-changing
- * grid edge. Convention: density > 0 is solid rock, <= 0 is air.
- */
-export function surface_nets(data: Float32Array, block_type: Uint8Array, nx: number, ny: number, nz: number, voxel: number, origin_x: number, origin_y: number, origin_z: number, nbx: number, nby: number): NetsResult;
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
-    readonly __wbg_colorizeresult_free: (a: number, b: number) => void;
     readonly __wbg_fieldsprofileresult_free: (a: number, b: number) => void;
+    readonly __wbg_meshresult_free: (a: number, b: number) => void;
     readonly __wbg_noisekit_free: (a: number, b: number) => void;
-    readonly __wbg_volumeresult_free: (a: number, b: number) => void;
-    readonly bake_ao: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number];
-    readonly colorize: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number, s: number, t: number, u: number, v: number, w: number, x: number, y: number, z: number, a1: number, b1: number, c1: number, d1: number) => number;
-    readonly colorizeresult_colors: (a: number) => [number, number];
-    readonly colorizeresult_facies: (a: number) => [number, number];
-    readonly fields_profile: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number, s: number, t: number) => number;
-    readonly fieldsprofileresult_crater_d: (a: number) => [number, number];
-    readonly fieldsprofileresult_ground_h: (a: number) => [number, number];
+    readonly fields_profile: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: any) => [number, number, number];
+    readonly fieldsprofileresult_crater_d: (a: number) => any;
+    readonly fieldsprofileresult_ground_h: (a: number) => any;
     readonly fieldsprofileresult_max_h: (a: number) => number;
-    readonly fieldsprofileresult_wall_mask: (a: number) => [number, number];
-    readonly fill_volume: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number) => number;
-    readonly noisekit_fbm2: (a: number, b: number, c: number, d: number) => number;
-    readonly noisekit_fbm3: (a: number, b: number, c: number, d: number, e: number) => number;
+    readonly fieldsprofileresult_wall_mask: (a: number) => any;
+    readonly generate_mesh: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: any, r: any, s: any, t: number) => [number, number, number];
+    readonly meshresult_ao: (a: number) => any;
+    readonly meshresult_colors: (a: number) => any;
+    readonly meshresult_facies: (a: number) => any;
+    readonly meshresult_indices: (a: number) => any;
+    readonly meshresult_mixed_count: (a: number) => number;
+    readonly meshresult_nbx: (a: number) => number;
+    readonly meshresult_nby: (a: number) => number;
+    readonly meshresult_nbz: (a: number) => number;
+    readonly meshresult_normals: (a: number) => any;
+    readonly meshresult_positions: (a: number) => any;
+    readonly meshresult_solid_count: (a: number) => number;
+    readonly meshresult_stage_ms: (a: number) => any;
     readonly noisekit_fill_fbm3: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number];
     readonly noisekit_new: (a: number) => number;
     readonly noisekit_noise2: (a: number, b: number, c: number) => number;
     readonly noisekit_noise3: (a: number, b: number, c: number, d: number) => number;
-    readonly noisekit_ridged2: (a: number, b: number, c: number, d: number) => number;
     readonly signed_distance: (a: number, b: number, c: number, d: number) => [number, number];
-    readonly surface_nets: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number) => number;
-    readonly volumeresult_block_type: (a: number) => [number, number];
-    readonly volumeresult_data: (a: number) => [number, number];
-    readonly volumeresult_mixed_count: (a: number) => number;
-    readonly volumeresult_nbx: (a: number) => number;
-    readonly volumeresult_nby: (a: number) => number;
-    readonly volumeresult_nbz: (a: number) => number;
-    readonly volumeresult_solid_count: (a: number) => number;
-    readonly __wbg_netsresult_free: (a: number, b: number) => void;
-    readonly netsresult_indices: (a: number) => [number, number];
-    readonly netsresult_positions: (a: number) => [number, number];
-    readonly __wbindgen_externrefs: WebAssembly.Table;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
+    readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
+    readonly __wbindgen_exn_store: (a: number) => void;
+    readonly __externref_table_alloc: () => number;
+    readonly __wbindgen_externrefs: WebAssembly.Table;
+    readonly __externref_table_dealloc: (a: number) => void;
     readonly __wbindgen_free: (a: number, b: number, c: number) => void;
     readonly __wbindgen_start: () => void;
 }

@@ -1,21 +1,29 @@
-//! Faithful port of src/gen/surfacenets.ts `surfaceNets()` (stage 3 of the
-//! wasm generator move). The wasm path always has block info, so the
-//! `blocks?` parameter of the JS is a required argument here.
+//! Faithful port of src/gen/surfacenets.ts `surfaceNets()`. The wasm path
+//! always has block info, so the `blocks?` parameter of the JS is a required
+//! argument here (folded into `VolDims`). Consumed only by the fused pipeline
+//! (pipeline.rs) — the old per-stage wasm export is gone; the typed
+//! `surface_nets` below is the crate's library face for this stage.
 //!
-//! Determinism contract (the exactness traps, mirroring the JS precisely):
-//! - The JS builds `positions` as a number[] — i.e. f64 — and converts to
-//!   Float32Array only at return. diagSq()/pushTri() read the UNROUNDED f64
-//!   positions during construction (diagonal tie-break + degenerate test).
-//!   Ported as a Vec<f64> build buffer, rounded to f32 only at the end.
-//! - The corner buffer `g` is a Float32Array in the JS: data (f32) is stored
-//!   into f32 slots and promoted to f64 exactly where the centroid math
-//!   reads it (`da`/`db`).
+//! Surface nets stays SEQUENTIAL by design: vertex indices are allocated in
+//! cell-visit order and the index stream references earlier cells, so the
+//! loop is order-dependent and must not go through par.rs.
+//!
+//! Determinism contract (Gate 5): deterministic f32, same expressions, same
+//! cell-visit order; the JS fallback is visually equivalent, not bitwise.
+//! - The build buffer is a Vec<Vec3> — f32 lanes since Gate 5 (the JS built
+//!   a number[] and rounded at return; byte-parity is retired). diag_sq()/
+//!   push_tri() read that build buffer directly, so the diagonal tie-break
+//!   and the degenerate test compare in f32 — still deterministic.
+//! - The corner buffer `g` is f32 slots exactly like the JS Float32Array;
+//!   the crossing parameter t = da/(da - db) is computed in f32 straight
+//!   from those slots (same expression, narrower lanes).
 //! - Cells are visited z -> y -> xRun (+= BLOCK, skipping non-MIXED blocks)
-//!   -> x, identical to the JS, so the vertex/index streams match
-//!   byte-for-byte.
+//!   -> x, identical to the JS, so the vertex/index streams line up
+//!   run-to-run for a given seed.
 
+use crate::grid::VolDims;
+use crate::math::{idx3, vec3, Vec3};
 use crate::volume::{BLOCK, BLOCK_MIXED, BLOCK_SHIFT};
-use wasm_bindgen::prelude::*;
 
 // 12 cube edges as corner-index pairs; corner i offset = (i&1, (i>>1)&1, (i>>2)&1)
 const EDGES: [(usize, usize); 12] = [
@@ -24,73 +32,50 @@ const EDGES: [(usize, usize); 12] = [
     (0, 4), (1, 5), (2, 6), (3, 7), // along z
 ];
 
-#[wasm_bindgen]
-pub struct NetsResult {
-    positions: Vec<f32>,
-    indices: Vec<u32>,
-}
-
-#[wasm_bindgen]
-impl NetsResult {
-    #[wasm_bindgen(getter)]
-    pub fn positions(&self) -> Vec<f32> {
-        self.positions.clone()
-    }
-
-    #[wasm_bindgen(getter)]
-    pub fn indices(&self) -> Vec<u32> {
-        self.indices.clone()
-    }
+/// Typed output of `surface_nets`: one `[f32; 3]` slot per vertex plus the
+/// triangle index stream, owned Vecs the pipeline consumes in place.
+pub struct SurfaceMesh {
+    pub vertices: Vec<[f32; 3]>,
+    pub indices: Vec<u32>,
 }
 
 /// Port of surfaceNets(): one vertex per sign-crossing cell (centroid of
 /// edge intersections), quads (as triangle pairs) across every sign-changing
 /// grid edge. Convention: density > 0 is solid rock, <= 0 is air.
-#[wasm_bindgen]
-#[allow(clippy::too_many_arguments)]
-pub fn surface_nets(
-    data: &[f32],
-    block_type: &[u8],
-    nx: u32,
-    ny: u32,
-    nz: u32,
-    voxel: f64,
-    origin_x: f64,
-    origin_y: f64,
-    origin_z: f64,
-    nbx: u32,
-    nby: u32,
-) -> NetsResult {
-    let nx = nx as usize;
-    let ny = ny as usize;
-    let nz = nz as usize;
-    let nbx = nbx as usize;
-    let nby = nby as usize;
-    assert_eq!(data.len(), nx * ny * nz, "data length");
-    assert!(
-        block_type.len() >= nbx * nby * nz.div_ceil(BLOCK),
-        "blockType length"
-    );
+///
+/// `origin_y` is separate from `dims` because the volume's world mapping has
+/// no y origin (it starts at y = 0) — the mesher has always passed 0 here.
+/// f32 like the rest of the world mapping (Gate 5); the caller narrows any
+/// boundary f64 once at its own entry.
+pub fn surface_nets(data: &[f32], block_type: &[u8], dims: &VolDims, origin_y: f32) -> SurfaceMesh {
+    let (nx, ny, nz) = (dims.n.x, dims.n.y, dims.n.z);
+    let voxel = dims.voxel;
+    assert_eq!(data.len(), dims.n.count(), "data length");
+    assert!(block_type.len() >= dims.nb.count(), "blockType length");
     // degenerate grid: the JS loops simply don't run (guards the usize n-1)
     if nx < 2 || ny < 2 || nz < 2 {
-        return NetsResult { positions: Vec::new(), indices: Vec::new() };
+        return SurfaceMesh { vertices: Vec::new(), indices: Vec::new() };
     }
 
-    // f64 build buffer — the JS number[]; rounded to f32 only at return
-    let mut positions: Vec<f64> = Vec::new();
+    // build buffer (f32 lanes since Gate 5) — tie-break/degeneracy tests read
+    // it before the vertices Vec is materialized
+    let mut positions: Vec<Vec3> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
-    let mut cell_idx = vec![-1i32; nx * ny * nz];
+    let mut cell_idx = vec![-1i32; dims.n.count()];
     let mut g = [0.0f32; 8]; // Float32Array(8) in the JS
     let stride_y = nx;
     let stride_z = nx * ny;
     let steps = [1usize, stride_y, stride_z];
+    // the volume's world origin (y is the caller's origin_y, always 0 today)
+    let origin = dims.origin.with_y(origin_y);
 
     // Cells are visited in the same global z -> y -> x order as the JS;
     // skipped runs are provably crossing-free, so the emitted vertex/index
-    // streams are byte-identical either way.
+    // streams are identical with or without the block skip.
     for z in 0..nz - 1 {
         for y in 0..ny - 1 {
-            let block_row = ((z >> BLOCK_SHIFT) * nby + (y >> BLOCK_SHIFT)) * nbx;
+            // block row base — dims.block_idx with bx = 0, y/z part hoisted
+            let block_row = dims.block_idx(idx3(0, y >> BLOCK_SHIFT, z >> BLOCK_SHIFT));
             let mut x_run = 0usize;
             while x_run < nx - 1 {
                 if block_type[block_row + (x_run >> BLOCK_SHIFT)] != BLOCK_MIXED {
@@ -99,7 +84,7 @@ pub fn surface_nets(
                 }
                 let x_end = (x_run + BLOCK).min(nx - 1);
                 for x in x_run..x_end {
-                    let base = x + y * stride_y + z * stride_z;
+                    let base = dims.idx(idx3(x, y, z));
                     let mut mask = 0u32;
                     for i in 0..8 {
                         let v = data
@@ -114,9 +99,7 @@ pub fn surface_nets(
                     }
 
                     // vertex = centroid of edge crossings, in cell-local [0,1]^3
-                    let mut vx = 0.0f64;
-                    let mut vy = 0.0f64;
-                    let mut vz = 0.0f64;
+                    let mut v = Vec3::default();
                     let mut count = 0u32;
                     for &(a, b) in EDGES.iter() {
                         let in_a = (mask >> a) & 1;
@@ -124,32 +107,32 @@ pub fn surface_nets(
                         if in_a == in_b {
                             continue;
                         }
-                        // f32 slots promoted to f64 here, exactly like the JS read
-                        let da = g[a] as f64;
-                        let db = g[b] as f64;
+                        // crossing parameter straight from the f32 corner
+                        // slots — same da/(da - db) expression, f32 lanes
+                        let da = g[a];
+                        let db = g[b];
                         let mut t = da / (da - db);
                         if !t.is_finite() {
                             t = 0.5;
                         }
-                        let ax = (a & 1) as f64;
-                        let ay = ((a >> 1) & 1) as f64;
-                        let az = ((a >> 2) & 1) as f64;
-                        let bx = (b & 1) as f64;
-                        let by = ((b >> 1) & 1) as f64;
-                        let bz = ((b >> 2) & 1) as f64;
-                        vx += ax + (bx - ax) * t;
-                        vy += ay + (by - ay) * t;
-                        vz += az + (bz - az) * t;
+                        // per lane: `va += ca + (cb - ca) * t` — the JS += lines,
+                        // grouped (component-wise, order-safe)
+                        let ca = corner(a);
+                        let cb = corner(b);
+                        v = v + (ca + (cb - ca) * t);
                         count += 1;
                     }
-                    vx /= count as f64;
-                    vy /= count as f64;
-                    vz /= count as f64;
+                    // JS `vx /= count` per lane: kept as DIVISION — a grouped
+                    // reciprocal-multiply (v * (1/count)) would round differently
+                    let cf = count as f32;
+                    let v = vec3(v.x / cf, v.y / cf, v.z / cf);
 
-                    cell_idx[base] = (positions.len() / 3) as i32;
-                    positions.push(origin_x + (x as f64 + vx) * voxel);
-                    positions.push(origin_y + (y as f64 + vy) * voxel);
-                    positions.push(origin_z + (z as f64 + vz) * voxel);
+                    cell_idx[base] = positions.len() as i32;
+                    // world position: `origin + (cell + v) * voxel` per axis —
+                    // the same per-lane expression the scalar spelling had
+                    // (component-wise grouping, order-safe)
+                    let cell = vec3(x as f32, y as f32, z as f32);
+                    positions.push(origin + (cell + v) * voxel);
 
                     // faces: for each axis edge from corner 0, if sign changes,
                     // connect the 4 cells sharing that edge (requires neighbors behind us)
@@ -198,39 +181,42 @@ pub fn surface_nets(
         }
     }
 
-    NetsResult {
-        // new Float32Array(positions): each f64 rounds to f32 here, and only here
-        positions: positions.iter().map(|&p| p as f32).collect(),
+    SurfaceMesh {
+        // the build buffer is already f32 lanes — this is a plain repack
+        // into the `[f32; 3]` slots the pipeline consumes
+        vertices: positions.iter().map(|p| p.to_f32()).collect(),
         indices,
     }
 }
 
-/// squared length of the diagonal a-b, on the UNROUNDED f64 build buffer
+/// Cell-corner offset of corner index i: (i&1, (i>>1)&1, (i>>2)&1).
 #[inline(always)]
-fn diag_sq(pos: &[f64], a: usize, b: usize) -> f64 {
-    let dx = pos[a * 3] - pos[b * 3];
-    let dy = pos[a * 3 + 1] - pos[b * 3 + 1];
-    let dz = pos[a * 3 + 2] - pos[b * 3 + 2];
-    dx * dx + dy * dy + dz * dz
+fn corner(i: usize) -> Vec3 {
+    vec3((i & 1) as f32, ((i >> 1) & 1) as f32, ((i >> 2) & 1) as f32)
+}
+
+/// squared length of the diagonal a-b on the build buffer (`dot(self)` is
+/// the same left-assoc dx*dx + dy*dy + dz*dz sum; the tie-break compares in
+/// f32 since Gate 5 — still deterministic)
+#[inline(always)]
+fn diag_sq(pos: &[Vec3], a: usize, b: usize) -> f32 {
+    let d = pos[a] - pos[b];
+    d.dot(d)
 }
 
 /// emit a triangle unless it is (near-)degenerate — cross-product test on
-/// the UNROUNDED f64 build buffer, epsilon identical to the JS
+/// the build buffer, same 1e-10 epsilon as the JS, compared in f32 since
+/// Gate 5 (`Vec3::cross` spells the exact component order the scalar code
+/// used)
 #[inline(always)]
-fn push_tri(pos: &[f64], indices: &mut Vec<u32>, a: usize, b: usize, c: usize) {
+fn push_tri(pos: &[Vec3], indices: &mut Vec<u32>, a: usize, b: usize, c: usize) {
     if a == b || b == c || a == c {
         return;
     }
-    let abx = pos[b * 3] - pos[a * 3];
-    let aby = pos[b * 3 + 1] - pos[a * 3 + 1];
-    let abz = pos[b * 3 + 2] - pos[a * 3 + 2];
-    let acx = pos[c * 3] - pos[a * 3];
-    let acy = pos[c * 3 + 1] - pos[a * 3 + 1];
-    let acz = pos[c * 3 + 2] - pos[a * 3 + 2];
-    let cx = aby * acz - abz * acy;
-    let cy = abz * acx - abx * acz;
-    let cz = abx * acy - aby * acx;
-    if cx * cx + cy * cy + cz * cz < 1e-10 {
+    let ab = pos[b] - pos[a];
+    let ac = pos[c] - pos[a];
+    let n = ab.cross(ac);
+    if n.dot(n) < 1e-10 {
         return;
     }
     indices.push(a as u32);

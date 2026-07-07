@@ -1,43 +1,13 @@
 /* @ts-self-types="./canyonworks_wasm.d.ts" */
 
-export class ColorizeResult {
-    static __wrap(ptr) {
-        const obj = Object.create(ColorizeResult.prototype);
-        obj.__wbg_ptr = ptr;
-        ColorizeResultFinalization.register(obj, obj.__wbg_ptr, obj);
-        return obj;
-    }
-    __destroy_into_raw() {
-        const ptr = this.__wbg_ptr;
-        this.__wbg_ptr = 0;
-        ColorizeResultFinalization.unregister(this);
-        return ptr;
-    }
-    free() {
-        const ptr = this.__destroy_into_raw();
-        wasm.__wbg_colorizeresult_free(ptr, 0);
-    }
-    /**
-     * @returns {Float32Array}
-     */
-    get colors() {
-        const ret = wasm.colorizeresult_colors(this.__wbg_ptr);
-        var v1 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
-        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
-        return v1;
-    }
-    /**
-     * @returns {Float32Array}
-     */
-    get facies() {
-        const ret = wasm.colorizeresult_facies(this.__wbg_ptr);
-        var v1 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
-        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
-        return v1;
-    }
-}
-if (Symbol.dispose) ColorizeResult.prototype[Symbol.dispose] = ColorizeResult.prototype.free;
-
+/**
+ * wasm result wrapper around `Profile` — getters COPY out (established
+ * pattern: the TS side keeps the buffers long-term, so they must be copies,
+ * never views into wasm memory). Buffer getters via the shared
+ * `pipeline::typed_array_getters!` (one copy, wasm memory -> JS heap);
+ * `max_h` has a manual getter because it promotes f32 -> f64 at the
+ * boundary (same four getter names/types as before — ABI unchanged).
+ */
 export class FieldsProfileResult {
     static __wrap(ptr) {
         const obj = Object.create(FieldsProfileResult.prototype);
@@ -60,20 +30,19 @@ export class FieldsProfileResult {
      */
     get crater_d() {
         const ret = wasm.fieldsprofileresult_crater_d(this.__wbg_ptr);
-        var v1 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
-        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
-        return v1;
+        return ret;
     }
     /**
      * @returns {Float32Array}
      */
     get ground_h() {
         const ret = wasm.fieldsprofileresult_ground_h(this.__wbg_ptr);
-        var v1 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
-        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
-        return v1;
+        return ret;
     }
     /**
+     * `max_h` is an f32 max internally (Gate-5 whitelist item 5); it is
+     * promoted to f64 ONLY here, at the JS boundary — the getter keeps the
+     * f64 (JS number) ABI it always had.
      * @returns {number}
      */
     get max_h() {
@@ -85,54 +54,133 @@ export class FieldsProfileResult {
      */
     get wall_mask() {
         const ret = wasm.fieldsprofileresult_wall_mask(this.__wbg_ptr);
-        var v1 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
-        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
-        return v1;
+        return ret;
     }
 }
 if (Symbol.dispose) FieldsProfileResult.prototype[Symbol.dispose] = FieldsProfileResult.prototype.free;
 
-export class NetsResult {
+/**
+ * Final mesh buffers + block stats + per-stage timing, crossing the
+ * boundary ONCE — `MeshBuffers` flattened for JS (the `[f32; 3]` buffers
+ * become flat Vecs via `into_flattened`, a free reinterpretation; the JS
+ * ABI is unchanged).
+ */
+export class MeshResult {
     static __wrap(ptr) {
-        const obj = Object.create(NetsResult.prototype);
+        const obj = Object.create(MeshResult.prototype);
         obj.__wbg_ptr = ptr;
-        NetsResultFinalization.register(obj, obj.__wbg_ptr, obj);
+        MeshResultFinalization.register(obj, obj.__wbg_ptr, obj);
         return obj;
     }
     __destroy_into_raw() {
         const ptr = this.__wbg_ptr;
         this.__wbg_ptr = 0;
-        NetsResultFinalization.unregister(this);
+        MeshResultFinalization.unregister(this);
         return ptr;
     }
     free() {
         const ptr = this.__destroy_into_raw();
-        wasm.__wbg_netsresult_free(ptr, 0);
+        wasm.__wbg_meshresult_free(ptr, 0);
+    }
+    /**
+     * @returns {Float32Array}
+     */
+    get ao() {
+        const ret = wasm.meshresult_ao(this.__wbg_ptr);
+        return ret;
+    }
+    /**
+     * @returns {Float32Array}
+     */
+    get colors() {
+        const ret = wasm.meshresult_colors(this.__wbg_ptr);
+        return ret;
+    }
+    /**
+     * @returns {Float32Array}
+     */
+    get facies() {
+        const ret = wasm.meshresult_facies(this.__wbg_ptr);
+        return ret;
     }
     /**
      * @returns {Uint32Array}
      */
     get indices() {
-        const ret = wasm.netsresult_indices(this.__wbg_ptr);
-        var v1 = getArrayU32FromWasm0(ret[0], ret[1]).slice();
-        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
-        return v1;
+        const ret = wasm.meshresult_indices(this.__wbg_ptr);
+        return ret;
+    }
+    /**
+     * @returns {number}
+     */
+    get mixed_count() {
+        const ret = wasm.meshresult_mixed_count(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * @returns {number}
+     */
+    get nbx() {
+        const ret = wasm.meshresult_nbx(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * @returns {number}
+     */
+    get nby() {
+        const ret = wasm.meshresult_nby(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * @returns {number}
+     */
+    get nbz() {
+        const ret = wasm.meshresult_nbz(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * @returns {Float32Array}
+     */
+    get normals() {
+        const ret = wasm.meshresult_normals(this.__wbg_ptr);
+        return ret;
     }
     /**
      * @returns {Float32Array}
      */
     get positions() {
-        const ret = wasm.netsresult_positions(this.__wbg_ptr);
-        var v1 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
-        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
-        return v1;
+        const ret = wasm.meshresult_positions(this.__wbg_ptr);
+        return ret;
+    }
+    /**
+     * @returns {number}
+     */
+    get solid_count() {
+        const ret = wasm.meshresult_solid_count(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * @returns {Float64Array}
+     */
+    get stage_ms() {
+        const ret = wasm.meshresult_stage_ms(this.__wbg_ptr);
+        return ret;
     }
 }
-if (Symbol.dispose) NetsResult.prototype[Symbol.dispose] = NetsResult.prototype.free;
+if (Symbol.dispose) MeshResult.prototype[Symbol.dispose] = MeshResult.prototype.free;
 
 /**
- * Mirror of core/noise.ts `NoiseKit` — same seed derivation
- * (`seed ^ 0x2f6e2b1` / `seed ^ 0x5b7e4d3`), same output values.
+ * Parity/bench harness face over the map's shared noise (core/noise.ts
+ * `NoiseKit`, pruned to the methods the TS harness in src/core/wasmGen.ts
+ * actually calls: `noise2`/`noise3` samples + the `fill_fbm3` bench
+ * kernel). Delegates to `grid::MapNoise`, the ONE home for the makeNoise
+ * seed derivation (`seed ^ 0x2f6e2b1` / `seed ^ 0x5b7e4d3`), so the harness
+ * provably samples the same fields as every kernel stage. The JS-number
+ * boundary stays f64 in/out; args narrow to f32 AND repack into the
+ * compound `Vec2`/`Vec3` sample points ONCE at entry (Gate-5 whitelist
+ * item 4 + the Gate-7 fringe rule — scalars live only here, at the
+ * #[wasm_bindgen] surface). Kernel noise math is f32, so the TS parity
+ * harness measures nearness to the JS noise, not bit-identity.
  */
 export class NoiseKit {
     __destroy_into_raw() {
@@ -144,27 +192,6 @@ export class NoiseKit {
     free() {
         const ptr = this.__destroy_into_raw();
         wasm.__wbg_noisekit_free(ptr, 0);
-    }
-    /**
-     * @param {number} x
-     * @param {number} y
-     * @param {number} octaves
-     * @returns {number}
-     */
-    fbm2(x, y, octaves) {
-        const ret = wasm.noisekit_fbm2(this.__wbg_ptr, x, y, octaves);
-        return ret;
-    }
-    /**
-     * @param {number} x
-     * @param {number} y
-     * @param {number} z
-     * @param {number} octaves
-     * @returns {number}
-     */
-    fbm3(x, y, z, octaves) {
-        const ret = wasm.noisekit_fbm3(this.__wbg_ptr, x, y, z, octaves);
-        return ret;
     }
     /**
      * Bench/parity kernel: fill an nx×ny×nz grid with fbm3 sampled at
@@ -214,183 +241,17 @@ export class NoiseKit {
         const ret = wasm.noisekit_noise3(this.__wbg_ptr, x, y, z);
         return ret;
     }
-    /**
-     * @param {number} x
-     * @param {number} y
-     * @param {number} octaves
-     * @returns {number}
-     */
-    ridged2(x, y, octaves) {
-        const ret = wasm.noisekit_ridged2(this.__wbg_ptr, x, y, octaves);
-        return ret;
-    }
 }
 if (Symbol.dispose) NoiseKit.prototype[Symbol.dispose] = NoiseKit.prototype.free;
 
-export class VolumeResult {
-    static __wrap(ptr) {
-        const obj = Object.create(VolumeResult.prototype);
-        obj.__wbg_ptr = ptr;
-        VolumeResultFinalization.register(obj, obj.__wbg_ptr, obj);
-        return obj;
-    }
-    __destroy_into_raw() {
-        const ptr = this.__wbg_ptr;
-        this.__wbg_ptr = 0;
-        VolumeResultFinalization.unregister(this);
-        return ptr;
-    }
-    free() {
-        const ptr = this.__destroy_into_raw();
-        wasm.__wbg_volumeresult_free(ptr, 0);
-    }
-    /**
-     * @returns {Uint8Array}
-     */
-    get block_type() {
-        const ret = wasm.volumeresult_block_type(this.__wbg_ptr);
-        var v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-        wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-        return v1;
-    }
-    /**
-     * @returns {Float32Array}
-     */
-    get data() {
-        const ret = wasm.volumeresult_data(this.__wbg_ptr);
-        var v1 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
-        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
-        return v1;
-    }
-    /**
-     * @returns {number}
-     */
-    get mixed_count() {
-        const ret = wasm.volumeresult_mixed_count(this.__wbg_ptr);
-        return ret >>> 0;
-    }
-    /**
-     * @returns {number}
-     */
-    get nbx() {
-        const ret = wasm.volumeresult_nbx(this.__wbg_ptr);
-        return ret >>> 0;
-    }
-    /**
-     * @returns {number}
-     */
-    get nby() {
-        const ret = wasm.volumeresult_nby(this.__wbg_ptr);
-        return ret >>> 0;
-    }
-    /**
-     * @returns {number}
-     */
-    get nbz() {
-        const ret = wasm.volumeresult_nbz(this.__wbg_ptr);
-        return ret >>> 0;
-    }
-    /**
-     * @returns {number}
-     */
-    get solid_count() {
-        const ret = wasm.volumeresult_solid_count(this.__wbg_ptr);
-        return ret >>> 0;
-    }
-}
-if (Symbol.dispose) VolumeResult.prototype[Symbol.dispose] = VolumeResult.prototype.free;
-
 /**
- * Port of bakeAo(): one AO value per vertex (positions.len() / 3). Rays
- * start just off the surface along the vertex normal, get bent mildly
- * toward the normal, and march AO_RADII; the first solid hit adds its
- * AO_HIT weight. ao = 1 - occ / 12.
- * @param {Float32Array} positions
- * @param {Float32Array} normals
- * @param {Float32Array} data
- * @param {number} nx
- * @param {number} ny
- * @param {number} nz
- * @param {number} voxel
- * @param {number} origin_x
- * @param {number} origin_z
- * @returns {Float32Array}
- */
-export function bake_ao(positions, normals, data, nx, ny, nz, voxel, origin_x, origin_z) {
-    const ptr0 = passArrayF32ToWasm0(positions, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ptr1 = passArrayF32ToWasm0(normals, wasm.__wbindgen_malloc);
-    const len1 = WASM_VECTOR_LEN;
-    const ptr2 = passArrayF32ToWasm0(data, wasm.__wbindgen_malloc);
-    const len2 = WASM_VECTOR_LEN;
-    const ret = wasm.bake_ao(ptr0, len0, ptr1, len1, ptr2, len2, nx, ny, nz, voxel, origin_x, origin_z);
-    var v4 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
-    return v4;
-}
-
-/**
- * Port of colorizeJs(): one rgb color + one xyz facies triple per vertex
- * (positions.len() / 3 each). Volume grid (`nx/ny/nz/voxel/origin_*`) feeds
- * the cave-tint probe; field grid (`fnx/fnz/fvoxel/forigin_*`) feeds the
- * groundH/s2/crackD bilinear samplers and the craterD nearest sampler.
- * Noise is constructed exactly like NoiseKit::new from `seed`.
- * @param {Float32Array} positions
- * @param {Float32Array} normals
- * @param {Float32Array} data
- * @param {number} nx
- * @param {number} ny
- * @param {number} nz
- * @param {number} voxel
- * @param {number} origin_x
- * @param {number} origin_z
- * @param {number} fnx
- * @param {number} fnz
- * @param {number} fvoxel
- * @param {number} forigin_x
- * @param {number} forigin_z
- * @param {Float32Array} ground_h
- * @param {Float32Array} s2
- * @param {Float32Array} crack_d
- * @param {Float32Array} crater_d
- * @param {Float64Array} params
- * @param {Float64Array} palette
- * @param {number} seed
- * @returns {ColorizeResult}
- */
-export function colorize(positions, normals, data, nx, ny, nz, voxel, origin_x, origin_z, fnx, fnz, fvoxel, forigin_x, forigin_z, ground_h, s2, crack_d, crater_d, params, palette, seed) {
-    const ptr0 = passArrayF32ToWasm0(positions, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ptr1 = passArrayF32ToWasm0(normals, wasm.__wbindgen_malloc);
-    const len1 = WASM_VECTOR_LEN;
-    const ptr2 = passArrayF32ToWasm0(data, wasm.__wbindgen_malloc);
-    const len2 = WASM_VECTOR_LEN;
-    const ptr3 = passArrayF32ToWasm0(ground_h, wasm.__wbindgen_malloc);
-    const len3 = WASM_VECTOR_LEN;
-    const ptr4 = passArrayF32ToWasm0(s2, wasm.__wbindgen_malloc);
-    const len4 = WASM_VECTOR_LEN;
-    const ptr5 = passArrayF32ToWasm0(crack_d, wasm.__wbindgen_malloc);
-    const len5 = WASM_VECTOR_LEN;
-    const ptr6 = passArrayF32ToWasm0(crater_d, wasm.__wbindgen_malloc);
-    const len6 = WASM_VECTOR_LEN;
-    const ptr7 = passArrayF64ToWasm0(params, wasm.__wbindgen_malloc);
-    const len7 = WASM_VECTOR_LEN;
-    const ptr8 = passArrayF64ToWasm0(palette, wasm.__wbindgen_malloc);
-    const len8 = WASM_VECTOR_LEN;
-    const ret = wasm.colorize(ptr0, len0, ptr1, len1, ptr2, len2, nx, ny, nz, voxel, origin_x, origin_z, fnx, fnz, fvoxel, forigin_x, forigin_z, ptr3, len3, ptr4, len4, ptr5, len5, ptr6, len6, ptr7, len7, ptr8, len8, seed);
-    return ColorizeResult.__wrap(ret);
-}
-
-/**
- * Port of the fields.ts step-7 per-column ground-profile loop
- * (`fieldsProfileJs` on the TS side): floor noise + crater bowls/rims +
- * talus + wall profile (plateau quantization, per-mesa offset, doming,
- * terraced strata, gullies) + hex flattening + fissure carving.
+ * wasm export wrapper over `profile` — the per-column ground-profile pass.
  *
- * Inputs: `s2` is the signed distance ALREADY scaled to world units by the
- * caller; `craters` is 4-stride [x, z, r, depth]; `params` uses the FIELDS
- * PARAMS order in the module doc. The loop only uses the 2D noise channel:
- * `Noise2::new(seed ^ 0x2f6e2b1)`, the same derivation as NoiseKit.
+ * Typed-params boundary (Gate 2): `params` is the live GenParams object
+ * decoded via serde (replaces the old 15-entry f64 vec + separate seed;
+ * seed = `params.seed >>> 0`). `craters` stays a 4-stride [x, z, r, depth]
+ * f64 array — it is a JS-built placement list, fine as-is. `s2` must be
+ * ALREADY scaled to world units by the caller.
  * @param {number} nx
  * @param {number} nz
  * @param {number} voxel
@@ -402,11 +263,10 @@ export function colorize(positions, normals, data, nx, ny, nz, voxel, origin_x, 
  * @param {Uint8Array} flat_raw
  * @param {Float32Array} mesa_off
  * @param {Float64Array} craters
- * @param {Float64Array} params
- * @param {number} seed
+ * @param {any} params
  * @returns {FieldsProfileResult}
  */
-export function fields_profile(nx, nz, voxel, origin_x, origin_z, s2, crack_d, flatten_w, flat_raw, mesa_off, craters, params, seed) {
+export function fields_profile(nx, nz, voxel, origin_x, origin_z, s2, crack_d, flatten_w, flat_raw, mesa_off, craters, params) {
     const ptr0 = passArrayF32ToWasm0(s2, wasm.__wbindgen_malloc);
     const len0 = WASM_VECTOR_LEN;
     const ptr1 = passArrayF32ToWasm0(crack_d, wasm.__wbindgen_malloc);
@@ -419,56 +279,61 @@ export function fields_profile(nx, nz, voxel, origin_x, origin_z, s2, crack_d, f
     const len4 = WASM_VECTOR_LEN;
     const ptr5 = passArrayF64ToWasm0(craters, wasm.__wbindgen_malloc);
     const len5 = WASM_VECTOR_LEN;
-    const ptr6 = passArrayF64ToWasm0(params, wasm.__wbindgen_malloc);
-    const len6 = WASM_VECTOR_LEN;
-    const ret = wasm.fields_profile(nx, nz, voxel, origin_x, origin_z, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, ptr5, len5, ptr6, len6, seed);
-    return FieldsProfileResult.__wrap(ret);
+    const ret = wasm.fields_profile(nx, nz, voxel, origin_x, origin_z, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, ptr5, len5, params);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return FieldsProfileResult.__wrap(ret[0]);
 }
 
 /**
- * Port of buildDensityVolume() minus carve-op SDF evaluation (ops stay in
- * JS); op bounds are still consumed here to force affected blocks MIXED.
+ * Fused generator entry point — the whole mesh chain in one crossing.
  *
- * `params` layout (spec PARAMS order):
- * 0 wallNoiseAmp, 1 wallNoiseFreq, 2 ledgeAmp, 3 terraceStep, 4 floorBase,
- * 5 washAmp, 6 washHeight, 7 washCoverage, 8 washScale.
- *
- * `op_bounds` is 6 f64 per op: [minX, maxX, minY, maxY, minZ, maxZ].
- * @param {number} seed
+ * Inputs: the five 2D field rasters (ground_h/wall_mask/s2 feed the fill;
+ * crack_d/crater_d feed colorize — the volume shares the field raster's
+ * x/z grid, so one set of dims covers both), `max_h` (ny is derived here
+ * via `volume_ny`), and carve ops + params + palette as JS objects decoded
+ * via serde (`params::from_js`, the one decode+error-map home).
+ * `force_all_mixed` is the bench flag disabling block classification.
+ * @param {Float32Array} ground_h
+ * @param {Float32Array} wall_mask
+ * @param {Float32Array} s2
+ * @param {Float32Array} crack_d
+ * @param {Float32Array} crater_d
  * @param {number} nx
- * @param {number} ny
  * @param {number} nz
  * @param {number} voxel
  * @param {number} origin_x
  * @param {number} origin_z
- * @param {Float32Array} ground_h
- * @param {Float32Array} wall_mask
- * @param {Float32Array} s2
- * @param {Float64Array} params
- * @param {Float64Array} op_bounds
+ * @param {number} max_h
+ * @param {any} ops
+ * @param {any} params
+ * @param {any} palette
  * @param {boolean} force_all_mixed
- * @returns {VolumeResult}
+ * @returns {MeshResult}
  */
-export function fill_volume(seed, nx, ny, nz, voxel, origin_x, origin_z, ground_h, wall_mask, s2, params, op_bounds, force_all_mixed) {
+export function generate_mesh(ground_h, wall_mask, s2, crack_d, crater_d, nx, nz, voxel, origin_x, origin_z, max_h, ops, params, palette, force_all_mixed) {
     const ptr0 = passArrayF32ToWasm0(ground_h, wasm.__wbindgen_malloc);
     const len0 = WASM_VECTOR_LEN;
     const ptr1 = passArrayF32ToWasm0(wall_mask, wasm.__wbindgen_malloc);
     const len1 = WASM_VECTOR_LEN;
     const ptr2 = passArrayF32ToWasm0(s2, wasm.__wbindgen_malloc);
     const len2 = WASM_VECTOR_LEN;
-    const ptr3 = passArrayF64ToWasm0(params, wasm.__wbindgen_malloc);
+    const ptr3 = passArrayF32ToWasm0(crack_d, wasm.__wbindgen_malloc);
     const len3 = WASM_VECTOR_LEN;
-    const ptr4 = passArrayF64ToWasm0(op_bounds, wasm.__wbindgen_malloc);
+    const ptr4 = passArrayF32ToWasm0(crater_d, wasm.__wbindgen_malloc);
     const len4 = WASM_VECTOR_LEN;
-    const ret = wasm.fill_volume(seed, nx, ny, nz, voxel, origin_x, origin_z, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, force_all_mixed);
-    return VolumeResult.__wrap(ret);
+    const ret = wasm.generate_mesh(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, nx, nz, voxel, origin_x, origin_z, max_h, ops, params, palette, force_all_mixed);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return MeshResult.__wrap(ret[0]);
 }
 
 /**
- * Port of sdf2d.ts `signedDistance()`: signed distance in CELL units,
- * positive inside the open region, negative inside walls. The `* voxel`
- * world-unit scaling happens in the TS caller (fields.ts step 2), NOT here.
- * Expected bit-identical to the JS (sqrt is IEEE-exact).
+ * wasm export wrapper over `edt` — JS ABI unchanged (Stage B may move its
+ * caller in-crate later); the fringe repacks the scalar dims into the
+ * `Idx2` the typed API takes.
  * @param {Uint8Array} open_raster
  * @param {number} nx
  * @param {number} nz
@@ -482,37 +347,231 @@ export function signed_distance(open_raster, nx, nz) {
     wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
     return v2;
 }
-
-/**
- * Port of surfaceNets(): one vertex per sign-crossing cell (centroid of
- * edge intersections), quads (as triangle pairs) across every sign-changing
- * grid edge. Convention: density > 0 is solid rock, <= 0 is air.
- * @param {Float32Array} data
- * @param {Uint8Array} block_type
- * @param {number} nx
- * @param {number} ny
- * @param {number} nz
- * @param {number} voxel
- * @param {number} origin_x
- * @param {number} origin_y
- * @param {number} origin_z
- * @param {number} nbx
- * @param {number} nby
- * @returns {NetsResult}
- */
-export function surface_nets(data, block_type, nx, ny, nz, voxel, origin_x, origin_y, origin_z, nbx, nby) {
-    const ptr0 = passArrayF32ToWasm0(data, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ptr1 = passArray8ToWasm0(block_type, wasm.__wbindgen_malloc);
-    const len1 = WASM_VECTOR_LEN;
-    const ret = wasm.surface_nets(ptr0, len0, ptr1, len1, nx, ny, nz, voxel, origin_x, origin_y, origin_z, nbx, nby);
-    return NetsResult.__wrap(ret);
-}
 function __wbg_get_imports() {
     const import0 = {
         __proto__: null,
+        __wbg_Error_92b29b0548f8b746: function(arg0, arg1) {
+            const ret = Error(getStringFromWasm0(arg0, arg1));
+            return ret;
+        },
+        __wbg_String_8564e559799eccda: function(arg0, arg1) {
+            const ret = String(arg1);
+            const ptr1 = passStringToWasm0(ret, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len1 = WASM_VECTOR_LEN;
+            getDataViewMemory0().setInt32(arg0 + 4 * 1, len1, true);
+            getDataViewMemory0().setInt32(arg0 + 4 * 0, ptr1, true);
+        },
+        __wbg___wbindgen_bigint_get_as_i64_d968e41184ae354f: function(arg0, arg1) {
+            const v = arg1;
+            const ret = typeof(v) === 'bigint' ? v : undefined;
+            getDataViewMemory0().setBigInt64(arg0 + 8 * 1, isLikeNone(ret) ? BigInt(0) : ret, true);
+            getDataViewMemory0().setInt32(arg0 + 4 * 0, !isLikeNone(ret), true);
+        },
+        __wbg___wbindgen_boolean_get_fa956cfa2d1bd751: function(arg0) {
+            const v = arg0;
+            const ret = typeof(v) === 'boolean' ? v : undefined;
+            return isLikeNone(ret) ? 0xFFFFFF : ret ? 1 : 0;
+        },
+        __wbg___wbindgen_debug_string_c25d447a39f5578f: function(arg0, arg1) {
+            const ret = debugString(arg1);
+            const ptr1 = passStringToWasm0(ret, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len1 = WASM_VECTOR_LEN;
+            getDataViewMemory0().setInt32(arg0 + 4 * 1, len1, true);
+            getDataViewMemory0().setInt32(arg0 + 4 * 0, ptr1, true);
+        },
+        __wbg___wbindgen_in_aca499c5de7ff5e5: function(arg0, arg1) {
+            const ret = arg0 in arg1;
+            return ret;
+        },
+        __wbg___wbindgen_is_bigint_2f76dc55065b4273: function(arg0) {
+            const ret = typeof(arg0) === 'bigint';
+            return ret;
+        },
+        __wbg___wbindgen_is_function_1ff95bcc5517c252: function(arg0) {
+            const ret = typeof(arg0) === 'function';
+            return ret;
+        },
+        __wbg___wbindgen_is_object_a27215656b807791: function(arg0) {
+            const val = arg0;
+            const ret = typeof(val) === 'object' && val !== null;
+            return ret;
+        },
+        __wbg___wbindgen_is_string_ea5e6cc2e4141dfe: function(arg0) {
+            const ret = typeof(arg0) === 'string';
+            return ret;
+        },
+        __wbg___wbindgen_is_undefined_c05833b95a3cf397: function(arg0) {
+            const ret = arg0 === undefined;
+            return ret;
+        },
+        __wbg___wbindgen_jsval_eq_e659fcf7b0e32763: function(arg0, arg1) {
+            const ret = arg0 === arg1;
+            return ret;
+        },
+        __wbg___wbindgen_jsval_loose_eq_db4c3b15f63fc170: function(arg0, arg1) {
+            const ret = arg0 == arg1;
+            return ret;
+        },
+        __wbg___wbindgen_number_get_394265ed1e1b84ee: function(arg0, arg1) {
+            const obj = arg1;
+            const ret = typeof(obj) === 'number' ? obj : undefined;
+            getDataViewMemory0().setFloat64(arg0 + 8 * 1, isLikeNone(ret) ? 0 : ret, true);
+            getDataViewMemory0().setInt32(arg0 + 4 * 0, !isLikeNone(ret), true);
+        },
+        __wbg___wbindgen_string_get_b0ca35b86a603356: function(arg0, arg1) {
+            const obj = arg1;
+            const ret = typeof(obj) === 'string' ? obj : undefined;
+            var ptr1 = isLikeNone(ret) ? 0 : passStringToWasm0(ret, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            var len1 = WASM_VECTOR_LEN;
+            getDataViewMemory0().setInt32(arg0 + 4 * 1, len1, true);
+            getDataViewMemory0().setInt32(arg0 + 4 * 0, ptr1, true);
+        },
         __wbg___wbindgen_throw_344f42d3211c4765: function(arg0, arg1) {
             throw new Error(getStringFromWasm0(arg0, arg1));
+        },
+        __wbg_call_8a2dd23819f8a60a: function() { return handleError(function (arg0, arg1) {
+            const ret = arg0.call(arg1);
+            return ret;
+        }, arguments); },
+        __wbg_done_89b2b13e91a60321: function(arg0) {
+            const ret = arg0.done;
+            return ret;
+        },
+        __wbg_entries_015dc610cd81ede0: function(arg0) {
+            const ret = Object.entries(arg0);
+            return ret;
+        },
+        __wbg_get_507a50627bffa49b: function(arg0, arg1) {
+            const ret = arg0[arg1 >>> 0];
+            return ret;
+        },
+        __wbg_get_78f252d074a84d0b: function() { return handleError(function (arg0, arg1) {
+            const ret = Reflect.get(arg0, arg1);
+            return ret;
+        }, arguments); },
+        __wbg_get_c7eb1f358a7654df: function() { return handleError(function (arg0, arg1) {
+            const ret = Reflect.get(arg0, arg1);
+            return ret;
+        }, arguments); },
+        __wbg_get_unchecked_6e0ad6d2a41b06f6: function(arg0, arg1) {
+            const ret = arg0[arg1 >>> 0];
+            return ret;
+        },
+        __wbg_get_with_ref_key_6412cf3094599694: function(arg0, arg1) {
+            const ret = arg0[arg1];
+            return ret;
+        },
+        __wbg_instanceof_ArrayBuffer_4480b9e0068a8adb: function(arg0) {
+            let result;
+            try {
+                result = arg0 instanceof ArrayBuffer;
+            } catch (_) {
+                result = false;
+            }
+            const ret = result;
+            return ret;
+        },
+        __wbg_instanceof_Map_e5b5e3db98422fcc: function(arg0) {
+            let result;
+            try {
+                result = arg0 instanceof Map;
+            } catch (_) {
+                result = false;
+            }
+            const ret = result;
+            return ret;
+        },
+        __wbg_instanceof_Uint8Array_309b927aaf7a3fc7: function(arg0) {
+            let result;
+            try {
+                result = arg0 instanceof Uint8Array;
+            } catch (_) {
+                result = false;
+            }
+            const ret = result;
+            return ret;
+        },
+        __wbg_isArray_0677c962b281d01a: function(arg0) {
+            const ret = Array.isArray(arg0);
+            return ret;
+        },
+        __wbg_isSafeInteger_04f36e4056f1b851: function(arg0) {
+            const ret = Number.isSafeInteger(arg0);
+            return ret;
+        },
+        __wbg_iterator_6f722e4a93058b71: function() {
+            const ret = Symbol.iterator;
+            return ret;
+        },
+        __wbg_length_1f0964f4a5e2c6d8: function(arg0) {
+            const ret = arg0.length;
+            return ret;
+        },
+        __wbg_length_370319915dc99107: function(arg0) {
+            const ret = arg0.length;
+            return ret;
+        },
+        __wbg_new_cd45aabdf6073e84: function(arg0) {
+            const ret = new Uint8Array(arg0);
+            return ret;
+        },
+        __wbg_new_from_slice_7568ba55b4a7e81f: function(arg0, arg1) {
+            const ret = new Uint32Array(getArrayU32FromWasm0(arg0, arg1));
+            return ret;
+        },
+        __wbg_new_from_slice_7e254b47c77fb8cc: function(arg0, arg1) {
+            const ret = new Float64Array(getArrayF64FromWasm0(arg0, arg1));
+            return ret;
+        },
+        __wbg_new_from_slice_ddf8b82c4d6af38e: function(arg0, arg1) {
+            const ret = new Float32Array(getArrayF32FromWasm0(arg0, arg1));
+            return ret;
+        },
+        __wbg_next_6dbf2c0ac8cde20f: function(arg0) {
+            const ret = arg0.next;
+            return ret;
+        },
+        __wbg_next_71f2aa1cb3d1e37e: function() { return handleError(function (arg0) {
+            const ret = arg0.next();
+            return ret;
+        }, arguments); },
+        __wbg_prototypesetcall_4770620bbe4688a0: function(arg0, arg1, arg2) {
+            Uint8Array.prototype.set.call(getArrayU8FromWasm0(arg0, arg1), arg2);
+        },
+        __wbg_static_accessor_GLOBAL_4ef717fb391d88b7: function() {
+            const ret = typeof global === 'undefined' ? null : global;
+            return isLikeNone(ret) ? 0 : addToExternrefTable0(ret);
+        },
+        __wbg_static_accessor_GLOBAL_THIS_8d1badc68b5a74f4: function() {
+            const ret = typeof globalThis === 'undefined' ? null : globalThis;
+            return isLikeNone(ret) ? 0 : addToExternrefTable0(ret);
+        },
+        __wbg_static_accessor_SELF_146583524fe1469b: function() {
+            const ret = typeof self === 'undefined' ? null : self;
+            return isLikeNone(ret) ? 0 : addToExternrefTable0(ret);
+        },
+        __wbg_static_accessor_WINDOW_f2829a2234d7819e: function() {
+            const ret = typeof window === 'undefined' ? null : window;
+            return isLikeNone(ret) ? 0 : addToExternrefTable0(ret);
+        },
+        __wbg_value_a5d5488a9589444a: function(arg0) {
+            const ret = arg0.value;
+            return ret;
+        },
+        __wbindgen_cast_0000000000000001: function(arg0) {
+            // Cast intrinsic for `I64 -> Externref`.
+            const ret = arg0;
+            return ret;
+        },
+        __wbindgen_cast_0000000000000002: function(arg0, arg1) {
+            // Cast intrinsic for `Ref(String) -> Externref`.
+            const ret = getStringFromWasm0(arg0, arg1);
+            return ret;
+        },
+        __wbindgen_cast_0000000000000003: function(arg0) {
+            // Cast intrinsic for `U64 -> Externref`.
+            const ret = BigInt.asUintN(64, arg0);
+            return ret;
         },
         __wbindgen_init_externref_table: function() {
             const table = wasm.__wbindgen_externrefs;
@@ -530,25 +589,95 @@ function __wbg_get_imports() {
     };
 }
 
-const ColorizeResultFinalization = (typeof FinalizationRegistry === 'undefined')
-    ? { register: () => {}, unregister: () => {} }
-    : new FinalizationRegistry(ptr => wasm.__wbg_colorizeresult_free(ptr, 1));
 const FieldsProfileResultFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_fieldsprofileresult_free(ptr, 1));
-const NetsResultFinalization = (typeof FinalizationRegistry === 'undefined')
+const MeshResultFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
-    : new FinalizationRegistry(ptr => wasm.__wbg_netsresult_free(ptr, 1));
+    : new FinalizationRegistry(ptr => wasm.__wbg_meshresult_free(ptr, 1));
 const NoiseKitFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_noisekit_free(ptr, 1));
-const VolumeResultFinalization = (typeof FinalizationRegistry === 'undefined')
-    ? { register: () => {}, unregister: () => {} }
-    : new FinalizationRegistry(ptr => wasm.__wbg_volumeresult_free(ptr, 1));
+
+function addToExternrefTable0(obj) {
+    const idx = wasm.__externref_table_alloc();
+    wasm.__wbindgen_externrefs.set(idx, obj);
+    return idx;
+}
+
+function debugString(val) {
+    // primitive types
+    const type = typeof val;
+    if (type == 'number' || type == 'boolean' || val == null) {
+        return  `${val}`;
+    }
+    if (type == 'string') {
+        return `"${val}"`;
+    }
+    if (type == 'symbol') {
+        const description = val.description;
+        if (description == null) {
+            return 'Symbol';
+        } else {
+            return `Symbol(${description})`;
+        }
+    }
+    if (type == 'function') {
+        const name = val.name;
+        if (typeof name == 'string' && name.length > 0) {
+            return `Function(${name})`;
+        } else {
+            return 'Function';
+        }
+    }
+    // objects
+    if (Array.isArray(val)) {
+        const length = val.length;
+        let debug = '[';
+        if (length > 0) {
+            debug += debugString(val[0]);
+        }
+        for(let i = 1; i < length; i++) {
+            debug += ', ' + debugString(val[i]);
+        }
+        debug += ']';
+        return debug;
+    }
+    // Test for built-in
+    const builtInMatches = /\[object ([^\]]+)\]/.exec(toString.call(val));
+    let className;
+    if (builtInMatches && builtInMatches.length > 1) {
+        className = builtInMatches[1];
+    } else {
+        // Failed to match the standard '[object ClassName]'
+        return toString.call(val);
+    }
+    if (className == 'Object') {
+        // we're a user defined class or Object
+        // JSON.stringify avoids problems with cycles, and is generally much
+        // easier than looping through ownProperties of `val`.
+        try {
+            return 'Object(' + JSON.stringify(val) + ')';
+        } catch (_) {
+            return 'Object';
+        }
+    }
+    // errors
+    if (val instanceof Error) {
+        return `${val.name}: ${val.message}\n${val.stack}`;
+    }
+    // TODO we could test for more things here, like `Set`s and `Map`s.
+    return className;
+}
 
 function getArrayF32FromWasm0(ptr, len) {
     ptr = ptr >>> 0;
     return getFloat32ArrayMemory0().subarray(ptr / 4, ptr / 4 + len);
+}
+
+function getArrayF64FromWasm0(ptr, len) {
+    ptr = ptr >>> 0;
+    return getFloat64ArrayMemory0().subarray(ptr / 8, ptr / 8 + len);
 }
 
 function getArrayU32FromWasm0(ptr, len) {
@@ -559,6 +688,14 @@ function getArrayU32FromWasm0(ptr, len) {
 function getArrayU8FromWasm0(ptr, len) {
     ptr = ptr >>> 0;
     return getUint8ArrayMemory0().subarray(ptr / 1, ptr / 1 + len);
+}
+
+let cachedDataViewMemory0 = null;
+function getDataViewMemory0() {
+    if (cachedDataViewMemory0 === null || cachedDataViewMemory0.buffer.detached === true || (cachedDataViewMemory0.buffer.detached === undefined && cachedDataViewMemory0.buffer !== wasm.memory.buffer)) {
+        cachedDataViewMemory0 = new DataView(wasm.memory.buffer);
+    }
+    return cachedDataViewMemory0;
 }
 
 let cachedFloat32ArrayMemory0 = null;
@@ -597,6 +734,19 @@ function getUint8ArrayMemory0() {
     return cachedUint8ArrayMemory0;
 }
 
+function handleError(f, args) {
+    try {
+        return f.apply(this, args);
+    } catch (e) {
+        const idx = addToExternrefTable0(e);
+        wasm.__wbindgen_exn_store(idx);
+    }
+}
+
+function isLikeNone(x) {
+    return x === undefined || x === null;
+}
+
 function passArray8ToWasm0(arg, malloc) {
     const ptr = malloc(arg.length * 1, 1) >>> 0;
     getUint8ArrayMemory0().set(arg, ptr / 1);
@@ -618,6 +768,49 @@ function passArrayF64ToWasm0(arg, malloc) {
     return ptr;
 }
 
+function passStringToWasm0(arg, malloc, realloc) {
+    if (realloc === undefined) {
+        const buf = cachedTextEncoder.encode(arg);
+        const ptr = malloc(buf.length, 1) >>> 0;
+        getUint8ArrayMemory0().subarray(ptr, ptr + buf.length).set(buf);
+        WASM_VECTOR_LEN = buf.length;
+        return ptr;
+    }
+
+    let len = arg.length;
+    let ptr = malloc(len, 1) >>> 0;
+
+    const mem = getUint8ArrayMemory0();
+
+    let offset = 0;
+
+    for (; offset < len; offset++) {
+        const code = arg.charCodeAt(offset);
+        if (code > 0x7F) break;
+        mem[ptr + offset] = code;
+    }
+    if (offset !== len) {
+        if (offset !== 0) {
+            arg = arg.slice(offset);
+        }
+        ptr = realloc(ptr, len, len = offset + arg.length * 3, 1) >>> 0;
+        const view = getUint8ArrayMemory0().subarray(ptr + offset, ptr + len);
+        const ret = cachedTextEncoder.encodeInto(arg, view);
+
+        offset += ret.written;
+        ptr = realloc(ptr, len, offset, 1) >>> 0;
+    }
+
+    WASM_VECTOR_LEN = offset;
+    return ptr;
+}
+
+function takeFromExternrefTable0(idx) {
+    const value = wasm.__wbindgen_externrefs.get(idx);
+    wasm.__externref_table_dealloc(idx);
+    return value;
+}
+
 let cachedTextDecoder = new TextDecoder('utf-8', { ignoreBOM: true, fatal: true });
 cachedTextDecoder.decode();
 const MAX_SAFARI_DECODE_BYTES = 2146435072;
@@ -632,6 +825,19 @@ function decodeText(ptr, len) {
     return cachedTextDecoder.decode(getUint8ArrayMemory0().subarray(ptr, ptr + len));
 }
 
+const cachedTextEncoder = new TextEncoder();
+
+if (!('encodeInto' in cachedTextEncoder)) {
+    cachedTextEncoder.encodeInto = function (arg, view) {
+        const buf = cachedTextEncoder.encode(arg);
+        view.set(buf);
+        return {
+            read: arg.length,
+            written: buf.length
+        };
+    };
+}
+
 let WASM_VECTOR_LEN = 0;
 
 let wasmModule, wasmInstance, wasm;
@@ -639,6 +845,7 @@ function __wbg_finalize_init(instance, module) {
     wasmInstance = instance;
     wasm = instance.exports;
     wasmModule = module;
+    cachedDataViewMemory0 = null;
     cachedFloat32ArrayMemory0 = null;
     cachedFloat64ArrayMemory0 = null;
     cachedUint32ArrayMemory0 = null;

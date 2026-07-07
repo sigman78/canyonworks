@@ -1,11 +1,14 @@
 import * as THREE from 'three';
 import { clamp01, fbm2, fbm3, ridged2, smoothstep, type NoiseKit } from '../core/noise';
-import { lastPerf, perfMark } from '../core/perf';
+import { lastPerf, perfMark, perfSpan } from '../core/perf';
 import type { Fields } from './fields';
 import type { GenParams } from './params';
 import type { CarveOp } from './carves';
-import { BLOCK, type DensityVolume } from './volume';
-import { buildNets, buildVolume, tryWasmAo, tryWasmColorize } from './volumeWasm';
+import { BLOCK, buildDensityVolume, type DensityVolume } from './volume';
+import { surfaceNets } from './surfacenets';
+import { tryWasmGenerateMesh, type PaletteSpec } from './volumeWasm';
+
+export type { PaletteSpec, Rgb } from './volumeWasm';
 
 export interface TerrainResult {
   geometry: THREE.BufferGeometry;
@@ -27,11 +30,51 @@ export function buildTerrainGeometry(
   noise: NoiseKit,
   ops: readonly CarveOp[] = [],
 ): TerrainResult {
-  const vol = buildVolume(fields, params, noise, ops);
+  // wasm-first: the fused generate_mesh runs the whole fill -> carve ops ->
+  // nets -> normals -> AO -> colorize chain in ONE boundary crossing; on
+  // any failure (wasmGen off, module not ready, wasm exception) the full
+  // per-stage chain below is the fallback
+  const wasmOut = tryWasmGenerateMesh(fields, params, ops, paletteSpec());
+  if (wasmOut) {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(wasmOut.positions, 3));
+    geometry.setIndex(new THREE.BufferAttribute(wasmOut.indices, 1));
+    geometry.setAttribute('normal', new THREE.BufferAttribute(wasmOut.normals, 3));
+    geometry.setAttribute('ao', new THREE.BufferAttribute(wasmOut.ao, 1));
+    geometry.setAttribute('color', new THREE.BufferAttribute(wasmOut.colors, 3));
+    geometry.setAttribute('facies', new THREE.BufferAttribute(wasmOut.facies, 3));
+    perfSpan({
+      volumeFill: wasmOut.stageMs[0],
+      surfaceNets: wasmOut.stageMs[1],
+      normals: wasmOut.stageMs[2],
+      aoBake: wasmOut.stageMs[3],
+      colorize: wasmOut.stageMs[4],
+    });
+    // ny for the HUD voxel stats — mirrors the wasm-side formula
+    // (pipeline.rs volume_ny) but computes it in f64 while wasm runs f32,
+    // so it can differ by 1 near a ceil boundary: voxRawKb is approximate
+    // on this path (display-only stat)
+    const ny = Math.ceil((fields.maxH + 1.0) / fields.voxel) + 1;
+    return terrainResult(
+      geometry,
+      wasmOut.positions,
+      wasmOut.indices,
+      fields.nx,
+      ny,
+      fields.nz,
+      wasmOut.nbx * wasmOut.nby * wasmOut.nbz,
+      wasmOut.mixedCount,
+      wasmOut.solidCount,
+    );
+  }
+
+  // pure-JS chain (the wasmGen=false fallback AND the regression reference —
+  // meshCompare in core/wasmGen.ts replays exactly these stages)
+  const vol = buildDensityVolume(fields, params, noise, ops);
   const { data, nx, ny, nz, voxel, originX, originZ } = vol;
   perfMark('volumeFill');
 
-  const nets = buildNets(vol, params);
+  const nets = surfaceNets(data, nx, ny, nz, voxel, originX, 0, originZ, vol);
   perfMark('surfaceNets');
 
   const geometry = new THREE.BufferGeometry();
@@ -41,23 +84,47 @@ export function buildTerrainGeometry(
   perfMark('normals');
 
   const nrm = (geometry.getAttribute('normal') as THREE.BufferAttribute).array as Float32Array;
-  const aoArr =
-    tryWasmAo(nets.positions, nrm, data, nx, ny, nz, voxel, originX, originZ, params) ??
-    computeAoJs(nets.positions, nrm, data, nx, ny, nz, voxel, originX, originZ);
+  const aoArr = computeAoJs(nets.positions, nrm, data, nx, ny, nz, voxel, originX, originZ);
   geometry.setAttribute('ao', new THREE.BufferAttribute(aoArr, 1));
   perfMark('aoBake');
-  const col =
-    tryWasmColorize(nets.positions, nrm, fields, params, flattenPalette(), vol) ??
-    colorizeJs(nets.positions, nrm, fields, params, noise, vol);
+  const col = colorizeJs(nets.positions, nrm, fields, params, noise, vol);
   geometry.setAttribute('color', new THREE.BufferAttribute(col.colors, 3));
   geometry.setAttribute('facies', new THREE.BufferAttribute(col.facies, 3));
   perfMark('colorize');
 
-  const nBlocks = vol.nbx * vol.nby * vol.nbz;
+  return terrainResult(
+    geometry,
+    nets.positions,
+    nets.indices,
+    nx,
+    ny,
+    nz,
+    vol.nbx * vol.nby * vol.nbz,
+    vol.mixedCount,
+    vol.solidCount,
+  );
+}
+
+/**
+ * Shared tail of both mesh paths: the `[mesher]` summary line (stage times
+ * read from lastPerf — perfMark fills them on the JS path, perfSpan on the
+ * wasm path) and the TerrainResult stats.
+ */
+function terrainResult(
+  geometry: THREE.BufferGeometry,
+  positions: Float32Array,
+  indices: Uint32Array,
+  nx: number,
+  ny: number,
+  nz: number,
+  nBlocks: number,
+  mixedCount: number,
+  solidCount: number,
+): TerrainResult {
   console.debug(
     `[mesher] ${nx}x${ny}x${nz} vox, blocks ${nBlocks} ` +
-      `(mixed ${vol.mixedCount} = ${Math.round((vol.mixedCount / nBlocks) * 100)}%, ` +
-      `solid ${vol.solidCount}) | fill ${(lastPerf.volumeFill ?? 0).toFixed(1)}ms, ` +
+      `(mixed ${mixedCount} = ${Math.round((mixedCount / nBlocks) * 100)}%, ` +
+      `solid ${solidCount}) | fill ${(lastPerf.volumeFill ?? 0).toFixed(1)}ms, ` +
       `nets ${(lastPerf.surfaceNets ?? 0).toFixed(1)}ms, ` +
       `normals ${(lastPerf.normals ?? 0).toFixed(1)}ms, ` +
       `ao ${(lastPerf.aoBake ?? 0).toFixed(1)}ms, ` +
@@ -66,11 +133,11 @@ export function buildTerrainGeometry(
 
   return {
     geometry,
-    vertexCount: nets.positions.length / 3,
-    triangleCount: nets.indices.length / 3,
+    vertexCount: positions.length / 3,
+    triangleCount: indices.length / 3,
     voxRawKb: Math.round((nx * ny * nz * 4) / 1024),
     // mixed blocks store voxels; homogeneous ones just their type byte
-    voxSparseKb: Math.round((vol.mixedCount * BLOCK * BLOCK * BLOCK * 4 + nBlocks) / 1024),
+    voxSparseKb: Math.round((mixedCount * BLOCK * BLOCK * BLOCK * 4 + nBlocks) / 1024),
   };
 }
 
@@ -93,8 +160,8 @@ const AO_HIT = [1.0, 0.7, 0.45, 0.25];
 /**
  * Per-vertex AO sampled straight from the density volume: short rays fanned
  * around the vertex normal, first solid hit occludes by distance weight.
- * Pure JS fallback for the wasm `bake_ao` (dispatched via tryWasmAo in
- * ./volumeWasm); the result is stored as an `ao` attribute at the call site
+ * Pure JS fallback for the wasm AO stage inside generate_mesh; the result
+ * is stored as an `ao` attribute at the call site
  * and applied in the shader by a live uniform, so the amount slider needs
  * no rebake. Reads the raw Float32Arrays — identical values to the old
  * BufferAttribute getters (attribute .array IS the raw Float32Array).
@@ -165,7 +232,7 @@ const C = (hex: number) => new THREE.Color(hex);
  * Sedona palette, baked into vertex colors by colorizeJs() / the wasm
  * colorize. EXPORTED LIVE OBJECTS: the Palette panel (ui/palettePanel.ts)
  * mutates these Colors and triggers a regenerate — colorizeJs() reads them
- * fresh each run, and flattenPalette() re-snapshots them per call for the
+ * fresh each run, and paletteSpec() re-snapshots them per call for the
  * wasm path (never baked into the module).
  */
 export const TERRAIN_PALETTE = {
@@ -196,45 +263,37 @@ const CRACK_DEEP = TERRAIN_PALETTE.crackDeep;
 const CRACK_LIP = TERRAIN_PALETTE.crackLip;
 
 /**
- * PALETTE vector order — MUST match wasm/src/colorize.rs exactly:
- * strata0..4, floorA, floorB, cap, crevice, craterIn, craterWall, craterRim,
- * ejecta, crackDeep, crackLip — 15 colors × 3 (r, g, b) = 45 f64 values.
+ * TERRAIN_PALETTE as plain serializable {r, g, b} objects for the fused
+ * wasm generate_mesh (serde-decoded by wasm/src/params.rs `Palette`).
  * Rebuilt PER CALL and never cached: TERRAIN_PALETTE holds live THREE.Color
- * objects the Palette panel mutates between regenerates. Components are
- * linear-space floats passed as-is (the color math is pure lerp/multiply).
- * Lives here (not in volumeWasm) because volumeWasm importing this module
- * would close an import cycle — the call site hands the array in.
+ * objects the Palette panel mutates between regenerates. Lives here (not in
+ * volumeWasm) because volumeWasm importing this module would close an
+ * import cycle — the call site hands the spec in.
  */
-export function flattenPalette(): Float64Array {
-  const list = [
-    ...STRATA,
-    FLOOR_A,
-    FLOOR_B,
-    CAP,
-    CREVICE,
-    CRATER_IN,
-    CRATER_WALL,
-    CRATER_RIM,
-    EJECTA,
-    CRACK_DEEP,
-    CRACK_LIP,
-  ];
-  const out = new Float64Array(list.length * 3);
-  for (let i = 0; i < list.length; i++) {
-    out[i * 3] = list[i].r;
-    out[i * 3 + 1] = list[i].g;
-    out[i * 3 + 2] = list[i].b;
-  }
-  return out;
+export function paletteSpec(): PaletteSpec {
+  const rgb = (c: THREE.Color) => ({ r: c.r, g: c.g, b: c.b });
+  return {
+    strata: STRATA.map(rgb),
+    floorA: rgb(FLOOR_A),
+    floorB: rgb(FLOOR_B),
+    cap: rgb(CAP),
+    crevice: rgb(CREVICE),
+    craterIn: rgb(CRATER_IN),
+    craterWall: rgb(CRATER_WALL),
+    craterRim: rgb(CRATER_RIM),
+    ejecta: rgb(EJECTA),
+    crackDeep: rgb(CRACK_DEEP),
+    crackLip: rgb(CRACK_LIP),
+  };
 }
 
 /**
  * Vertex colorize: Sedona palette baked into vertex colors + the 3-channel
- * `facies` morphology attribute. Pure JS fallback for the wasm `colorize`
- * (dispatched via tryWasmColorize in ./volumeWasm); the caller stores the
- * returned arrays as the 'color' and 'facies' attributes. Reads the raw
- * Float32Arrays — identical values to the old BufferAttribute getters
- * (attribute .array IS the raw Float32Array).
+ * `facies` morphology attribute. Pure JS fallback for the wasm colorize
+ * stage inside generate_mesh; the caller stores the returned arrays as the
+ * 'color' and 'facies' attributes. Reads the raw Float32Arrays — identical
+ * values to the old BufferAttribute getters (attribute .array IS the raw
+ * Float32Array).
  */
 export function colorizeJs(
   positions: Float32Array,
